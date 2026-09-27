@@ -10,8 +10,7 @@ For example:
 Flinkt 0.4.x
 ├── Apache Flink 2.3.x adapter
 ├── Apache Flink 2.2.x adapter
-├── Apache Flink 1.20.x adapter
-└── Apache Flink 1.19.x adapter
+└── Apache Flink 1.20.x adapter
 ```
 
 The application API should remain the same across these adapters:
@@ -45,16 +44,18 @@ Being downloadable from the Apache archive doesn't make a release supported eith
 
 ### Current support matrix
 
-Status as of September 27, 2026:
+Status as of September 27, 2026. Community status comes from the Apache Flink [update policy](https://flink.apache.org/downloads/#update-policy-for-old-releases), which supports the current and previous minor release, and from the [Flink 1.20 LTS](https://flink.apache.org/documentation/flink-lts/) designation.
 
-| Apache Flink line | Flinkt status | Notes |
-|---|---|---|
-| `2.3.x` | Supported target | Current Flink 2.x release line |
-| `2.2.x` | Supported target | Previous supported Flink 2.x release line |
-| `2.1.x` | Supported target | Active Community support |
-| `1.20.x` | Supported target | Current Flink 1.x LTS line |
-| `2.0.x` | Not supported | Older release line |
-| `1.19.x` and older | Not supported | Community support has ended |
+| Apache Flink line | Community status | Flinkt status | Notes |
+|---|---|---|---|
+| `2.3.x` | Supported | Not yet supported | Target line; no adapter yet |
+| `2.2.x` | Supported | Not yet supported | Target line; no adapter yet |
+| `1.20.x` | Supported (1.x LTS) | Not yet supported | Target line; no adapter yet |
+| `2.1.x` | Ended | Not supported | Lost support when 2.3.0 was released on June 25, 2026 |
+| `2.0.x` | Ended | Not supported | |
+| `1.19.x` and older | Ended | Not supported | |
+
+A target line becomes **Supported target** only after it meets the criteria in [Adopting a new Flink minor release](#adopting-a-new-flink-minor-release). No adapter exists yet, so Flinkt doesn't claim support for any line.
 
 The table is a snapshot. The project should update it whenever Apache Flink changes its supported release lines. [Dropping Flink support](#dropping-flink-support) covers what happens to a line that leaves community support.
 
@@ -436,13 +437,12 @@ A major-version adapter may therefore contain substantially different Flink-faci
 
 ## CI compatibility matrix
 
-Every supported minor line has its own build and integration lane:
+Every target minor line gets its own build and integration lane:
 
 | Adapter | Minimum tested Flink | Latest tested Flink |
 |---|---:|---:|
 | Flink `2.3.x` | `2.3.0` | latest `2.3.x` |
 | Flink `2.2.x` | `2.2.0` | latest `2.2.x` |
-| Flink `2.1.x` | `2.1.3` | latest `2.1.x` |
 | Flink `1.20.x` | `1.20.0` | latest `1.20.x` |
 
 A successful compile is not enough. The compatibility suite should exercise the contracts Flinkt adds on top of Flink:
