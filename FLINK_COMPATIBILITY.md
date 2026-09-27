@@ -51,12 +51,10 @@ Status as of September 27, 2026:
 |---|---|---|
 | `2.3.x` | Supported target | Current Flink 2.x release line |
 | `2.2.x` | Supported target | Previous supported Flink 2.x release line |
+| `2.1.x` | Supported target | Active Community support |
 | `1.20.x` | Supported target | Current Flink 1.x LTS line |
-| `1.19.x` | Supported target | Previous supported Flink 1.x release line |
-| `2.1.x` | Not supported | Older release line |
 | `2.0.x` | Not supported | Older release line |
-| `1.18.x` | Not supported | Community support has ended |
-| `1.15.x` and older | Not supported | Community support has ended |
+| `1.19.x` and older | Not supported | Community support has ended |
 
 The table is a snapshot. The project should update it whenever Apache Flink changes its supported release lines. [Dropping Flink support](#dropping-flink-support) covers what happens to a line that leaves community support.
 
@@ -444,8 +442,8 @@ Every supported minor line has its own build and integration lane:
 |---|---:|---:|
 | Flink `2.3.x` | `2.3.0` | latest `2.3.x` |
 | Flink `2.2.x` | `2.2.0` | latest `2.2.x` |
+| Flink `2.1.x` | `2.1.3` | latest `2.1.x` |
 | Flink `1.20.x` | `1.20.0` | latest `1.20.x` |
-| Flink `1.19.x` | `1.19.0` | latest `1.19.x` |
 
 A successful compile is not enough. The compatibility suite should exercise the contracts Flinkt adds on top of Flink:
 
