@@ -55,7 +55,7 @@ Status as of September 27, 2026. Community status comes from the Apache Flink [u
 | `2.0.x` | Ended | Not supported | |
 | `1.19.x` and older | Ended | Not supported | |
 
-A target line becomes **Supported target** only after it meets the criteria in [Adopting a new Flink minor release](#adopting-a-new-flink-minor-release). No adapter exists yet, so Flinkt doesn't claim support for any line.
+A target line becomes **Supported target** only after its adapter meets the [release criteria](testing.md#release-criteria) in the test strategy. No adapter exists yet, so Flinkt doesn't claim support for any line.
 
 The table is a snapshot. The project should update it whenever Apache Flink changes its supported release lines. [Dropping Flink support](#dropping-flink-support) covers what happens to a line that leaves community support.
 
@@ -378,13 +378,10 @@ compile against Flink 2.4
 resolve API differences
           │
           ▼
-run façade and type-system tests
+pass the release-tier suite on the 2.4 lane
           │
           ▼
-run serializer/state compatibility tests
-          │
-          ▼
-publish support
+mark 2.4.x Supported target in the matrix
 ```
 
 The process should not assume compatibility merely because existing code compiles. Particular attention should go to:
@@ -401,7 +398,7 @@ state descriptors
 Table DataType APIs
 ```
 
-Flinkt does not promise same-day support for a new minor line. Support begins when the adapter compiles, the façade integration, type-system, and serializer compatibility tests pass, and the support matrix is updated. Until then, the line is "Not yet supported", even though it shares a major version with a supported line.
+Flinkt does not promise same-day support for a new minor line. The line becomes **Supported target** when its adapter meets the [release criteria](testing.md#release-criteria), which require runtime and persisted-state evidence as well as compile and unit-level tests, and the support matrix is updated. Until then, the line is "Not yet supported", even though it shares a major version with a supported line.
 
 ## Patch upgrades
 

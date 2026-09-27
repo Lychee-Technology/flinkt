@@ -35,7 +35,7 @@ Code and reviews are held to these rules (see "Review focus" in the README):
 
 Still undecided, so don't present these as settled: the stable-ID policy, the null-bitmap representation, when a value class can use its underlying type's serializer, and the schema-evolution matrix.
 
-**First milestone.** It is a deliberately narrow vertical slice: `@FlinkType data class User(val id: Long, val name: String)`, then `map { User(...) }.name(...).keyBy { it.id }` through the façade, then `runtimeContext.valueState<User>("user")`, with serializer snapshots restoring state correctly. Nullable fields, collections, value classes, generics, sealed hierarchies, and migration come later and build on the contracts this slice sets.
+**First milestone.** It is a deliberately narrow vertical slice: `@FlinkType data class User(val id: Long, val name: String)`, then `map { User(...) }.name(...).keyBy { it.id }` through the façade, then `runtimeContext.valueState<User>("user")`, with serializer snapshots restoring state correctly. The milestone doesn't name a Flink line yet. Which adapter is built first, and which one PR CI treats as primary, is tracked in [#2](https://github.com/Lychee-Technology/flinkt/issues/2). Nullable fields, collections, value classes, generics, sealed hierarchies, and migration come later and build on the contracts this slice sets.
 
 ## Non-code artifacts
 

@@ -529,7 +529,7 @@ serializer contracts
 MiniCluster smoke tests
 ```
 
-A successful `compileKotlin` is not sufficient to declare a Flink version supported.
+A successful `compileKotlin` is not sufficient to declare a Flink version supported. [Release criteria](#release-criteria) defines what is.
 
 ### Test upgrade edges, not every historical pair
 
@@ -540,6 +540,8 @@ previous Flink minor → current Flink minor
 previous Flinkt release → current Flinkt release
 old Flinkt + same Flink line → new Flinkt + same Flink line
 ```
+
+Adding a Flink minor line always declares one edge: from the previous minor line of the same Flink major, when Flinkt supports that line or adds it in the same release. State descriptors and serializer snapshot integration live in each adapter, so a same-version test can't show that the new adapter reads state written through the previous one. Other edges are declared per release.
 
 A major-version edge should only exist where both Apache Flink and Flinkt explicitly support that migration.
 
@@ -695,6 +697,8 @@ incremental KSP smoke test
 primary Flink adapter MiniCluster smoke test
 ```
 
+Which adapter is primary hasn't been decided yet ([#2](https://github.com/Lychee-Technology/flinkt/issues/2)).
+
 A PR should not need to restore every historical savepoint.
 
 ### Merge and nightly
@@ -719,7 +723,8 @@ Failures in these lanes should be treated as compatibility regressions even if t
 Release CI provides the evidence behind compatibility claims. It should include:
 
 ```text
-all supported Flink adapter lanes
+every supported and candidate Flink adapter lane
+state integration suite on each of those adapters
 all immutable serializer fixtures
 previous released Flinkt → candidate Flinkt compatibility
 real savepoint restoration
@@ -728,7 +733,7 @@ published-artifact consumer tests
 runtime Flink-version mismatch guard
 ```
 
-A new Flink minor line should not be marked **Supported target** until this release-level suite passes.
+[Release criteria](#release-criteria) defines what this suite must show before a Flink line is marked **Supported target**.
 
 ## Suggested repository structure
 
@@ -798,7 +803,9 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 ## Release criteria
 
-A Flinkt release should not describe a combination as supported solely because it compiles. For a Flink adapter to be marked **Supported target**, there should be evidence that:
+This section is the only definition of when a Flink line may be marked **Supported target** in the [support matrix](flink-compatibility.md#current-support-matrix). Other documents link here instead of restating it.
+
+A Flinkt release should not describe a combination as supported solely because it compiles. A Flink line becomes **Supported target** only when the [release-tier suite](#release) passes with that line's adapter included, and the results show that, on that adapter:
 
 ```text
 the Kotlin API resolves correctly
@@ -806,9 +813,12 @@ the façade survives normal Flink chaining
 supported types preserve their intended type information
 generated serializers satisfy their contracts
 no documented specialized type silently falls back to generic serialization
-the primary runtime integration succeeds
+the MiniCluster integration pipeline produces correct results
+state survives checkpoint, restart, and restore, and processing continues correctly
 serializer compatibility claims match old bytes
-declared upgrade paths restore persisted state
+every declared upgrade edge into the line restores a real savepoint
 ```
+
+Savepoint upgrade tests belong to upgrade edges, not to adapters, because an edge needs an older combination to restore from. [Test upgrade edges, not every historical pair](#test-upgrade-edges-not-every-historical-pair) says which edges a new minor line must declare. The first Flinkt release has no older Flinkt to restore from, and a line without a supported predecessor, such as `1.20.x` today, has no cross-line edge. Where a line has no edge to test, its persisted-state evidence is the same-adapter checkpoint restore and the serializer fixtures.
 
 The exact CI implementation may evolve, but these proofs should remain separate so that a failure shows which contract broke.
