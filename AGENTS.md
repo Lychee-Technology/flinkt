@@ -2,9 +2,11 @@
 
 ## Project state
 
-**Flinkt** is in the design stage. The repository has the design (`README.md`) and contributor rules (`docs/`), but no source code, build files, or tests yet, so there are no build, lint, or test commands. Don't make them up. When a build is added (`.gitignore` expects Kotlin/Gradle), record the commands here, including how to run a single test.
+**Flinkt** is in the design stage. The repository has the design (`README.md`), the Flink version policy (`docs/flink-compatibility.md`), the test strategy (`docs/testing.md`), and contributor rules (`docs/non-code-rules.md`), but no source code, build files, or tests yet, so there are no build, lint, or test commands. Don't make them up. When a build is added (`.gitignore` expects Kotlin/Gradle), record the commands here, including how to run a single test.
 
 `README.md` is the design document. Read it before you propose or write code. It says which decisions are settled and which are deliberately left open.
+
+Read `docs/flink-compatibility.md` before you change Flink-facing code or the support matrix. Read `docs/testing.md` before you add tests or CI. It defines the evidence that each compatibility claim needs.
 
 ## Architecture (planned)
 

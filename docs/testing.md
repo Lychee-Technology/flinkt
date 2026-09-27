@@ -515,7 +515,7 @@ A release must not claim an upgrade path is supported based only on serializer u
 
 ## Flink version compatibility
 
-Every supported Flink minor line has its own adapter and test lane. The compatibility unit is the Flink minor line, such as `2.3.x` or `1.20.x`; [FLINK_COMPATIBILITY.md](FLINK_COMPATIBILITY.md#current-support-matrix) lists the supported lines.
+Every supported Flink minor line has its own adapter and test lane. The compatibility unit is the Flink minor line, such as `2.3.x` or `1.20.x`; [flink-compatibility.md](flink-compatibility.md#current-support-matrix) lists the supported lines.
 
 Within a supported line, CI should normally exercise both the first and the latest supported patch. This verifies that the adapter actually covers the range it claims.
 
