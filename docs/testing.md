@@ -809,7 +809,9 @@ incremental KSP smoke test
 MiniCluster smoke test
 ```
 
-These run on the **primary adapter**, which is the adapter for the newest Flink minor line the community supports. Today that's 2.3. The rule names a line rather than a fixed version, so this document doesn't change each time Flink releases a minor version. The first slice is built on that adapter.
+These run on the **primary adapter**, which is the adapter for the newest Flink minor line that has a Flinkt adapter. The first slice builds the 2.3 adapter, so 2.3 is the first primary adapter.
+
+A Flink release doesn't change the primary adapter; adding an adapter does. Flinkt adapts a new line some time after Flink releases it ([Adopting a new Flink minor release](flink-compatibility.md#adopting-a-new-flink-minor-release)), and until then pull requests keep running on the previous primary adapter. An adapter for a newer line becomes primary in the pull request that adds it, so that pull request has to pass this suite on the new line. If the primary adapter's line loses community support before a newer adapter exists, it stays primary. Community status decides what Flinkt may claim as supported, not where pull requests are checked. Falling back to an older supported line would take the newest Flink API that Flinkt builds against out of PR CI.
 
 PR CI also compiles the shared adapter source against Flink 1.20 and runs its compile contracts and adapter contract tests there, without a MiniCluster. 1.20 is where Flink's type protocol differs most from 2.x ([Differences between target lines](flink-compatibility.md#differences-between-target-lines)), and catching a 1.x/2.x difference on the PR that introduces it costs a compile and a graph build. Other lines join merge and nightly CI once their adapters exist.
 
