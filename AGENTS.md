@@ -26,6 +26,8 @@ Flinkt is a Kotlin-first layer over Apache Flink APIs. It has three layers: a KS
 
 **Generated code** implements the Flink-free codec SPI and never subclasses a Flink class. Each adapter owns the `TypeInformation`, `TypeSerializer`, and snapshot classes shared by all generated types. See [architecture.md](docs/architecture.md#generated-code-and-the-adapter).
 
+**Decided type forms.** Collections are `List` and `Map` only. They use one Flinkt-owned encoding as a field and as a top-level type: size, then elements or entries in iteration order. `Set`, `Collection`, the mutable interfaces and arrays fail explicitly. Enum constants and sealed subtypes carry `@FlinkId`, a positive `Int` written as 4 big-endian bytes, and each nested sealed level has its own ID namespace. See [architecture.md](docs/architecture.md#persisted-formats).
+
 ## Invariants
 
 Code and reviews are held to these rules. Each link goes to the canonical text:
@@ -34,11 +36,12 @@ Code and reviews are held to these rules. Each link goes to the canonical text:
 - **No silent Kryo.** A type Flinkt can't model fails explicitly, and generic serialization is opt-in only. ([README](README.md#make-unsupported-types-explicit))
 - **No reflection on the per-record path**: serialize, deserialize, copy, field access, or comparison. Also avoid `Array<Any?>`-style serializers. ([README](README.md#generated-serializers))
 - **Keep the full Kotlin type**, including nested generic arguments and nullability. `T::class.java` is not enough. ([README](README.md#generic-types))
-- **Stable identity.** Sealed subtypes and enums need logical IDs, not declaration order or ordinals. ([README](README.md#sealed-types-and-enums))
-- **Strict state compatibility.** A structural change is incompatible until its migration is defined and tested against old bytes. ([README](README.md#schema-and-state-compatibility), [testing.md](docs/testing.md#serializer-snapshot-compatibility))
+- **Stable identity.** Every enum constant and sealed subtype declares an explicit `@FlinkId`. Identity never comes from declaration order, ordinal or name, and an unknown ID fails the read. ([README](README.md#sealed-types-and-enums), [architecture.md](docs/architecture.md#enum-and-sealed-identity))
+- **Strict state compatibility.** In the first release an identical schema is compatible as-is, and every structural change is incompatible, for values and in every key role. There's no `compatibleAfterMigration`, no `compatibleWithReconfiguredSerializer`, and no key-specific snapshot. Snapshots still record the full schema, never only a hash, so a later release can add migrations. ([README](README.md#schema-and-state-compatibility), [architecture.md](docs/architecture.md#schema-evolution), [testing.md](docs/testing.md#serializer-snapshot-compatibility))
+- **Keys are proved, not assumed.** Serializable doesn't mean a safe key, and a compatible serializer doesn't mean a compatible key. `keyBy` partition keys, keyed `MapState` user keys and broadcast-state keys have separate rules. `keyBy` accepts only non-null built-ins, and value and data classes whose `equals()` and `hashCode()` are compiler-generated and whose components are all eligible. Enums, objects, sealed types, collections and nullable keys are rejected there. A `TypeInformation` Flinkt didn't build, or `asFlink()`, opts out of Flinkt's key checks. ([README](README.md#keys), [architecture.md](docs/architecture.md#keys))
 - **Views change nothing Flink sees.** Never construct a Flink stream object or read the type of a stream a view wraps. Call only public Flink methods. ([architecture.md](docs/architecture.md#views))
 
-Still undecided, so don't present these as settled: [Open questions](docs/architecture.md#open-questions).
+Still undecided, so don't present these as settled: [Open questions](docs/architecture.md#open-questions), which are the record binary layout and the value-class representation.
 
 **First milestone.** `@FlinkType data class User(val id: Long, val name: String)`, then `.flinkt().map { User(...) }.name(...).keyBy { it.id }.process(...)` with `runtimeContext.valueState<User>("user")`, with serializer snapshots restoring state correctly. It is built against Flink 2.3 first, and the adapter source also compiles against 1.20 in PR CI. See [README](README.md#initial-implementation-boundary) and [testing.md](docs/testing.md#pull-requests).
 

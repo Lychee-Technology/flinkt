@@ -124,7 +124,7 @@ data class Bad(
 
 The test should verify both the failure and the quality of the diagnostic. The error message should identify enough context to act on, such as the field `Bad.value` and the type `UnsupportedType`.
 
-Negative cases should cover constraints such as duplicate stable IDs, invalid annotation combinations, unsupported generic forms, unsupported recursive structures, and unsupported fields. A processor that fails correctly but reports only an internal exception is still wrong.
+Negative cases should cover constraints such as missing, duplicate or non-positive stable IDs, invalid annotation combinations, unsupported collection kinds, unsupported generic forms, unsupported recursive structures, and unsupported fields. A processor that fails correctly but reports only an internal exception is still wrong.
 
 ## Incremental compilation
 
@@ -341,9 +341,9 @@ Generated serializers handle combinations that are tedious to enumerate manually
 
 ```text
 null combinations
-boundary numeric values
+boundary numeric values, NaN and -0.0
 empty strings
-Unicode strings
+Unicode strings, including unpaired surrogates
 empty collections
 single-element collections
 nested collections
@@ -357,6 +357,7 @@ The core properties include:
 ```text
 deserialize(serialize(x)) == x
 copy(x) == x
+deserialize(serialize(m)) iterates m's entries in m's order     for a Map
 ```
 
 and, where aliasing matters:
@@ -408,7 +409,20 @@ Performance profiling may provide additional evidence, but it is not the correct
 
 ## Comparator and key semantics
 
-If Flinkt owns comparator behavior, it needs a dedicated contract suite. Relevant behavior includes:
+[Key eligibility](architecture.md#keys) is a promise that an accepted key finds its state again after a restore, in another JVM and after an upgrade. A job that restores in the JVM that wrote the checkpoint can't show that, because an identity hash code is consistent within one JVM. The tests cover each property the rules rely on:
+
+- **Eligibility at each enforcement point.** For every kind and each context, a test at the point where Flinkt checks it: graph build for the view's `keyBy`, `open()` for `runtimeContext.mapState`. Negative cases assert the message and include the ones that only a recursive rule catches:
+  - a data class with one ineligible property, where the message names that property;
+  - a data class that overrides `hashCode()`, or inherits a final one;
+  - a nullable key and a nullable property;
+  - an enum as a partition key.
+
+  A `keyBy` with a `TypeInformation` Flinkt didn't build is shown to reach Flink's validation unchecked.
+- **Hash stability.** Representative keys' hash codes and key groups are pinned as constants: `Long`, `String`, a value class over `Long`, a data class of two `Long`s, and a generic data-class instance. A Kotlin or JDK upgrade that changed the hash formula then fails a test. A second JVM computes the same values. A fresh JVM running the same code can reproduce identity hash codes: on JDK 25, an enum constant had the same `hashCode()` in two runs, and one extra identity hash earlier in the run changed it. So the second JVM perturbs its identity-hash sequence before computing, or the test can't tell an identity hash from a stable one.
+- **Byte determinism.** In each context that needs identical bytes, equal keys built in different ways serialize to equal bytes, and unequal keys to different bytes. The cases include NaNs with different payloads (equal), `0.0` and `-0.0` (unequal), and strings that differ only in an unpaired surrogate (unequal).
+- **Restore.** Keyed state under each allowed kind survives a checkpoint restored in a second JVM, on the heap and RocksDB backends, with every key's state found under the logically equal key. A BATCH job groups equal keys built in different ways.
+
+The first release supplies no comparators, so `isKeyType()` and `isSortKeyType()` are pinned to `false`. If a later release makes Flinkt own comparator behavior, it needs a dedicated contract suite. Relevant behavior includes:
 
 ```text
 object comparison
@@ -517,24 +531,40 @@ Direct serializer tests cannot prove that state descriptors, serializer creation
 
 ## Serializer snapshot compatibility
 
-Every supported schema transition must have an explicit expected compatibility result. Examples include:
+Every schema transition has an explicit expected result. The first release is strict ([Schema evolution](architecture.md#schema-evolution)): an identical schema is compatible as-is, and every structural change is incompatible. No transition is compatible after migration or with a reconfigured serializer.
 
-| Change | Expected result |
+| Change | Serializer result |
 |---|---|
 | identical schema | compatible as-is |
-| field reorder | defined by serializer policy |
-| append field | defined by serializer policy |
-| insert field | defined by serializer policy |
-| remove field | defined by serializer policy |
-| rename field | defined by serializer policy |
-| field type change | normally incompatible unless explicitly migrated |
-| nullability change | defined by serializer policy |
-| nested schema change | derived from nested compatibility |
-| enum change | defined by stable-ID policy |
-| sealed subtype change | defined by subtype-ID policy |
-| value-class underlying type change | normally incompatible |
+| enum constant or sealed subtype renamed, reordered or moved, with its ID unchanged | compatible as-is: IDs, not names, are compared |
+| field appended, inserted or removed | incompatible |
+| field reordered or renamed | incompatible |
+| field type change | incompatible |
+| nullability change, in either direction | incompatible |
+| nested schema change | incompatible |
+| collection kind, element, key or value type change | incompatible |
+| enum constant added or removed, or its ID changed | incompatible |
+| sealed subtype added, removed or moved to another level, its ID changed, or its fields changed | incompatible |
+| value-class underlying type change | incompatible |
+| switch between a value class and its underlying type, as `UserId` and `Long` | incompatible, even when the bytes match |
+| type argument change, as `Envelope<User>` to `Envelope<Order>` | incompatible |
+| a nested Flink serializer returns anything other than compatible-as-is | incompatible |
+| the class itself renamed or moved to another package | follows #5's type-identity rule |
 
-The table should be filled from the actual binary format, not from source-level intuition.
+The last row is settled when #5 is. Rows follow the snapshot content in [architecture.md](architecture.md#schema-evolution). If the implemented format makes a change the snapshot can't see, the table records it explicitly instead of letting it pass as identical.
+
+The result is the same in every role the serializer can have, and each role is tested on its own, because Flink restores values and keys through different code:
+
+| Role | Identical schema | Structural change |
+|---|---|---|
+| value | restores | fails explicitly |
+| `keyBy` partition key | restores | fails explicitly |
+| keyed `MapState` user key, heap and RocksDB separately | restores | fails explicitly |
+| broadcast-state map key | restores | fails explicitly |
+
+"Fails explicitly" means the restore stops with Flink's incompatibility error. On the heap keyed backend and for broadcast state, it can instead stop with the error #5's `restoreSerializer()` raises, because those paths read restored bytes before any compatibility check. Either way it stops before any value is read wrongly or any key's state is filed under another key.
+
+For a key, an identical schema is necessary but not sufficient. A changed `equals()` or `hashCode()` breaks a key without any schema difference. The [key tests](#comparator-and-key-semantics) and [savepoint tests](#savepoint-compatibility) cover that, not the snapshot tests.
 
 A build-time schema checker and `TypeSerializerSnapshot` answer different questions and should have separate tests.
 
@@ -552,7 +582,7 @@ new serializer
 correct value
 ```
 
-If compatibility requires migration, the test must exercise that migration path.
+If compatibility requires migration, the test must exercise that migration path. The first release has no migration branch. Its incompatible branch still gets old-bytes tests: bytes and a snapshot written by the old declaration, restored under the new one, fail explicitly before any value is read.
 
 This is a hard rule:
 
@@ -622,6 +652,8 @@ classloading
 Flink state backend
 Flink version upgrade
 ```
+
+The job keys its state by a Flinkt-managed type, such as a value class over `Long` or a data class of `Long`s, and checks after the restore that every key's state is found under the logically equal key. A restore that creates the serializers but comes back with empty state doesn't pass.
 
 A release must not claim an upgrade path is supported based only on serializer unit tests when savepoint restoration is part of that claim.
 
@@ -895,6 +927,8 @@ compatible after migration
 incompatible
 ```
 
+The first release expects only the first and the last. A test of a key role also states the role's outcome, restores or fails explicitly, apart from the serializer result.
+
 A helper that turns all compatibility checks into a generic "passes" assertion would hide which of these results the test expects.
 
 ## Review focus
@@ -910,6 +944,8 @@ Testing changes deserve review at the boundaries where false confidence is easie
 **Serializer compatibility:** Does the test read bytes created by the old implementation, or are both writer and reader the new serializer?
 
 **Snapshot results:** Is `compatibleAsIs` backed by a real old-bytes test?
+
+**Keys:** Could the test pass with an identity hash code, for example because the second JVM reproduces the first one's identity hashes? Does it compare the bytes of equal keys built in different ways?
 
 **Savepoints:** Is a claimed Flink/Flinkt upgrade path exercised through a real savepoint restore?
 

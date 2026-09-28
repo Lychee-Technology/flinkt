@@ -110,7 +110,7 @@ Shorter syntax is useful, but the main architectural reason for the library is t
 - value classes;
 - enums;
 - sealed hierarchies;
-- Kotlin collections.
+- Kotlin collections: `List` and `Map` in the first release.
 
 This list is the intended scope. What is actually supported will depend on the implementation and compatibility tests.
 
@@ -399,7 +399,7 @@ PaymentId
 
 to remain distinct application types without forcing generic serialization for each wrapper.
 
-Whether a representation change is compatible with previously persisted state remains a serializer-snapshot concern.
+Changing a value class's underlying type is incompatible with previously persisted state in the first release. So is switching a field between `UserId` and `Long`, even if the bytes would match ([Schema and state compatibility](#schema-and-state-compatibility)). A value class over an eligible type, such as `UserId`, can be a key ([Keys](#keys)).
 
 ---
 
@@ -443,35 +443,44 @@ Map<UserId, List<Event?>>
 
 Resolving only `T::class.java` is insufficient for these cases because JVM classes alone do not preserve the complete Kotlin type.
 
+The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a key ([Collections](docs/architecture.md#collections)).
+
 ---
 
 ## Sealed types and enums
 
-Sealed hierarchies can be represented as tagged unions:
+Sealed hierarchies are written as tagged unions, and enums are written as tags. Every subtype and every enum constant declares its tag with `@FlinkId`:
 
 ```kotlin
 @FlinkType
 sealed interface Event
 
 @FlinkType
+@FlinkId(1)
 data class UserCreated(
     val userId: UserId,
 ) : Event
 
 @FlinkType
+@FlinkId(2)
 data class UserDeleted(
     val userId: UserId,
 ) : Event
 
 @FlinkType
+@FlinkId(3)
 data object Shutdown : Event
+
+@FlinkType
+enum class Priority {
+    @FlinkId(1) LOW,
+    @FlinkId(2) HIGH,
+}
 ```
 
-Subtype identity must be stable across builds. Source declaration order is not a sufficient persistent identity.
+Declaration order and ordinals aren't stable. Inserting or reordering a subtype or constant would make old state decode as a different value, with no error. A tag derived from the name would change silently on a rename. An explicit ID survives both, so subtypes and constants can be renamed, reordered or moved between files without changing their bytes. An ID is permanent: don't give a retired ID to a different constant or subtype, because Flinkt can't tell that from a rename.
 
-Enums have the same problem: serializing an enum only by ordinal makes insertion and reordering hazardous for persisted state.
-
-Flinkt's schema model should therefore distinguish logical identity from source position. The concrete stable-ID policy remains part of the serializer compatibility design and should be reviewed before it becomes a persisted format.
+A missing or duplicate ID is a compile error. Reading an ID the current code doesn't declare fails, and any change to the set of IDs is incompatible in the first release. Enum constants with bodies, `object` and `data object` subtypes, and nested sealed hierarchies are supported, and each nested level numbers its own subtypes. [Enum and sealed identity](docs/architecture.md#enum-and-sealed-identity) gives the encoding.
 
 ---
 
@@ -534,6 +543,28 @@ A property-delegate DSL could make this shorter, but it would also make the runt
 
 ---
 
+## Keys
+
+A type Flinkt can serialize isn't automatically a safe key. Flink picks a partition key's key group from its `hashCode()` and finds RocksDB state by its bytes, and checkpoints persist both. A key whose hash code differs in the JVM that restores the job loses its state, and nothing reports an error. Flinkt accepts a modeled type as a key only where it can check mechanically that this can't happen:
+
+| Key type | `keyBy` | `mapState<K, V>()` user key | broadcast-state key |
+|---|---|---|---|
+| `Int`, `Long`, `String` and the other non-null primitives | yes | yes | yes |
+| value class over an eligible type, such as `UserId(val value: Long)` | yes | yes | yes |
+| `@FlinkType` data class whose properties are all eligible, such as `UserKey(val tenant: Long, val id: Long)` | yes | yes | yes |
+| enum | no | yes\* | yes\* |
+| `object`, `data object`, sealed type, `List`, `Map`, nullable `K?` | no | no | no |
+
+\* Once a restore test in a second JVM confirms it ([Eligibility](docs/architecture.md#eligibility)).
+
+The rule is recursive. A data class or value class is a key only if every property is, so one enum property makes a data class usable as a `MapState` user key but not in `keyBy`. A data class that overrides `equals()` or `hashCode()` isn't a key anywhere. Flinkt can't tell whether a hand-written hash code is the same in every JVM, or will stay the same in the next release. An enum's `@FlinkId` makes its bytes stable, but `Enum.hashCode()` is an identity hash code, so an enum isn't a partition key.
+
+Changing the `equals()` or `hashCode()` of a type that already keys persisted state is a breaking change, even when its schema stays the same, and no serializer snapshot can see it. Through the view, adding such an override makes the type ineligible, so the upgraded job fails when its graph is built.
+
+A rejected key fails when the job graph is built for `keyBy`, or in `open()` for `mapState`. The message names the type, the context and the reason. Two exits skip Flinkt's key checks on purpose: `keyBy` with a `TypeInformation` that Flinkt didn't build, and anything called through `asFlink()`. Flink's own validation then applies, and so do Flink's guarantees rather than Flinkt's. `mapStateDescriptor<K, V>()` checks no key rule, because its descriptor may become broadcast state. Nothing checks broadcast-state keys yet, because broadcast is reached through `asFlink()`. [Keys](docs/architecture.md#keys) gives the reasons.
+
+---
+
 ## Generated type registry
 
 Generated types need to work across module boundaries without scanning the entire classpath.
@@ -577,11 +608,20 @@ but detection alone does not prove that the new serializer can read the previous
 
 Flink checkpoint and savepoint compatibility is governed by `TypeSerializer` and `TypeSerializerSnapshot`.
 
-For that reason, the conservative starting point is strict compatibility: structural changes are incompatible until the serializer has a defined and tested migration path.
+The first release is strict. A snapshot whose schema is identical to the current declaration is compatible as-is. Any structural difference is incompatible, and restore stops with an error instead of reading state it might misinterpret. That covers:
 
-Serializer-format decisions become difficult to reverse after released applications have persisted state.
+- a field added, removed, renamed, reordered or retyped;
+- a nullability change;
+- a changed nested type or collection element;
+- an enum constant or sealed subtype added, removed or given a different ID;
+- a value class's underlying type;
+- a type argument.
 
-The preferred long-term trade-off is:
+Flinkt doesn't migrate state in the first release, even where a migration looks feasible. Renaming or reordering enum constants and sealed subtypes that keep their IDs isn't a change.
+
+The same holds when the type is a key. A structural change to a `keyBy` key, a `MapState` user key or a broadcast-state key is incompatible on every state backend. An unchanged schema is necessary for a key but not sufficient, because a key's identity also includes its `equals()` and `hashCode()` ([Keys](#keys)).
+
+Serializer-format decisions become difficult to reverse after released applications have persisted state. So the snapshots record the full schema even though the first release only compares it. The preferred long-term trade-off is still:
 
 ```text
 compact per-record representation
@@ -591,9 +631,7 @@ schema-rich serializer snapshot
 migration work during restore when necessary
 ```
 
-rather than writing field names or IDs into every record merely to make future migration easier.
-
-The exact evolution matrix is still open. It should be defined alongside the implemented serializer format and verified against state written by previous versions.
+rather than writing field names or IDs into every record merely to make future migration easier. A later release can add migrations for state the first release wrote, without changing what the first release persisted. [Schema evolution](docs/architecture.md#schema-evolution) gives the reasons, and [testing.md](docs/testing.md#serializer-snapshot-compatibility) lists every transition.
 
 ---
 
@@ -745,6 +783,8 @@ Review should focus on the boundaries where Kotlin convenience can accidentally 
 **Interoperability:** Does `asFlink()` return the original object, so every Flink API still accepts it?
 
 **State compatibility:** Does every compatibility result correspond to bytes that the new serializer can actually consume? This deserves more scrutiny than ordinary API code because persisted state outlives a process and often outlives a library release.
+
+**Keys:** Does every key rule rest on something Flinkt can check mechanically, rather than on the user's `hashCode()`? Would a key whose hash code or bytes differ in the restoring JVM be rejected before it's used?
 
 ---
 
