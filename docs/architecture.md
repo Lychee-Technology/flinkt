@@ -27,7 +27,7 @@ The first version of this design, in PR #1, made each Flinkt stream a subclass o
 - **Which object owns a stream's Flink state?** A subtype can't *be* the object Flink created, so it has to build a second one, on entry and around every object a Flink call returns. Flink keeps some state on stream objects rather than on their transformations: a keyed stream's partitioning, `forceNonParallel()`, requested side outputs, async state in 2.x, and a source's parallelism. A second object doesn't have that state.
 - **Which calls are Flinkt's?** A subtype inherits every Flink method under the same name. Whether a call gets Kotlin types then depends on details the user can't see at the call site: lambda versus function object, `final` versus overridable, whether an override exists, and whether an override could be reified at all.
 
-The following were executed against Flink 1.20.5, 2.2.1 and 2.3.0 with Kotlin 2.4.20 ([spike](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset)):
+The following were executed against Flink 1.20.5, 2.2.1 and 2.3.0 with Kotlin 2.4.20 ([spike](https://github.com/Lychee-Technology/flinkt/tree/4cccdc5ec6438d2f76e6598b0373fd2b1f563471/spikes/architecture-reset)):
 
 - **Rebuilt objects lost state.** A subtype rebuilt over a configured operator accepted `setParallelism(2)` after `forceNonParallel()`. A rebuilt keyed stream added a hash shuffle after `reinterpretAsKeyedStream`, and on 2.x it dropped `enableAsyncState()`.
 - **Inherited calls fell back to Kryo.** `map(MapFunction { … })` and `map(ToUser())` on the subtype resolved to Flink's inherited `map`, and Flink typed the result `GenericType<User>`, which is Kryo.
@@ -54,7 +54,7 @@ Each module exists because it has a different dependency or release profile:
 |---|---|---|
 | `flinkt-core` | Kotlin stdlib | `@FlinkType`, the schema and type model, the generated-codec SPI (`GeneratedCodec`, `GeneratedTypeModule`), and resolution from `KType` to the type model. Model modules and generated code depend on it, and it doesn't change when Flink does. |
 | `flinkt-ksp` | KSP API | Build time only. It must never reach a runtime classpath. |
-| `flinkt-view-codegen` | KSP API; JavaParser for the extraction script | A KSP processor that runs only in Flinkt's own build. It generates each adapter's [forwarders](#generated-forwarders) from that line's Flink classes, with the parameter names that a script in the same module extracts from Flink's sources. It isn't published, and users never run it. |
+| `flinkt-view-codegen` | KSP API; ASM for the extraction script | A KSP processor that runs only in Flinkt's own build. It generates each adapter's [forwarders](#generated-forwarders) from that line's Flink classes, with the parameter names that a script in the same module reads from those class files. It isn't published, and users never run it. |
 | `flinkt-flink23`, `flinkt-flink22`, `flinkt-flink120` | `flinkt-core`; Flink as `compileOnly` | One per Flink minor line, each owning its views, `typeInfo<T>()`, `TypeInformation`/`TypeSerializer`/`TypeSerializerSnapshot` for generated types, state helpers, and the runtime version guard. |
 
 The adapters are built from one shared source set, compiled against each line, plus small per-line source sets for real differences ([Differences between target lines](flink-compatibility.md#differences-between-target-lines)). A test kit becomes a published module only when something outside this repository needs it. Table integration gets its own per-line modules when it's built.
@@ -138,23 +138,19 @@ The generator runs against every line's classes. A listed method is therefore ch
 
 #### Parameter names
 
-Flink's jars have no `MethodParameters` attribute, so the compiler and KSP see `p0`, `p1`. Kotlin allows named arguments, which makes parameter names part of the source API. They are Flink's own names:
+Flink's jars have no `MethodParameters` attribute, so the compiler and KSP see `p0`, `p1`. Kotlin allows named arguments, which makes parameter names part of the source API. The names are still in the jars: Flink compiles with debug information, and each method's LocalVariableTable names its parameters. The forwarders use Flink's own names:
 
-- **Extraction.** A script in Flinkt's build reads each line's `-sources.jar` from Maven Central with JavaParser. It resolves every parameter type against that line's binary jars and writes one row per public method to a per-adapter `flink-api.tsv`. Each row holds the class, the method, the JVM descriptor, and the parameter names. The file is checked in, and it records the Flink version it came from.
-- **Checking.** The script checks every descriptor against the class files, both ways, and fails on any difference. The check caught two tool errors in the spike. JavaParser, and KSP's `Resolver.mapToJvmSignature`, both omit the array marker of a Java varargs parameter, so for `union` the two tools agreed on the same wrong descriptor. JavaParser also writes a nested type as `Outer/Inner` instead of `Outer$Inner`. The generator applies the same varargs correction on its side.
-- **Lookup.** KSP receives the file as a tracked Gradle input, so editing or regenerating it reruns generation. It looks up each forwarded method by its descriptor. A missing entry, or a file extracted from a different Flink version than the one on the classpath, fails the build.
+- **Extraction.** A script in Flinkt's build reads each line's class files with ASM. It takes each public method's JVM descriptor and its parameter names from the LocalVariableTable, and writes one row per method to a per-adapter `flink-api.tsv`. It prefers a `MethodParameters` attribute if Flink ever adds one. The file is checked in and records the Flink version it came from. The script reads the same jars the adapter compiles against, so each descriptor is the class file's own. It fails if a public method has no parameter names, which would mean Flink stopped compiling with debug information.
+- **Lookup.** KSP receives the file as a tracked Gradle input, so editing or regenerating it reruns generation. It looks up each forwarded method by its descriptor. A missing entry, or a file extracted from a different Flink version than the one on the classpath, fails the build. KSP's `Resolver.mapToJvmSignature` omits the array marker of a Java varargs parameter, so the generator corrects that before the lookup.
+- **Review.** The names file is where name changes are reviewed. The adapter's API dump records JVM signatures, which don't include parameter names.
 
 The result is `executeAndCollect(jobExecutionName, limit)`, `print(sinkIdentifier)`, `reduce(reducer)`, `setBufferTimeout(timeoutMillis)` and `union(vararg streams)`. Adopting a Flink line includes extracting its file, and the file's diff shows every name that changed.
 
+The spike also extracted the names from Flink's `-sources.jar` with JavaParser. After correcting two JavaParser descriptor errors (the varargs array marker, and nested types written as `Outer/Inner`), it produced the same rows as the class files on both lines. Reading the class files avoids the sources jar, the parser, and its descriptor errors.
+
 #### Documentation
 
-Each forwarder's KDoc links to the Flink method it calls, for example `[DataStream.sinkTo][org.apache.flink.streaming.api.datastream.DataStream.sinkTo]`, and Flinkt's API docs link to Flink's published Javadoc for the adapter's line. Flink hosts that Javadoc for each release, and Dokka's external links can use it.
-
-Flinkt doesn't copy Flink's Javadoc text into generated code, for three reasons:
-
-- **Licensing.** The text is under the Apache License 2.0 with a NOTICE file, and Flinkt is MIT-licensed. Copying it into the repository and into published sources would add attribution obligations.
-- **Accuracy.** Flink's Javadoc describes the Java method and its return type. A view returns a view.
-- **Freshness.** A copy goes stale when Flink edits its docs, while a link stays with the adapter's line.
+Generated forwarders have no KDoc in the first version. Whether to add it later, and how, is an [open question](#open-questions).
 
 #### Drift
 
@@ -162,9 +158,10 @@ A signature that Flink adds to a listed name still reaches Flinkt's public API w
 
 The generator checks the stability annotations of the methods it forwards. Flink 1.20's annotations have class retention, and KSP reads them from bytecode, so the check works on every line. The Flink methods that hand-written view code calls are covered by a [separate test](testing.md#flink-adapter-contract).
 
-Evidence: the [view-codegen spike](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset/view-codegen) ran against 2.3.0 and 1.20.5:
+Evidence: the [view-codegen spike](https://github.com/Lychee-Technology/flinkt/tree/4cccdc5ec6438d2f76e6598b0373fd2b1f563471/spikes/architecture-reset/view-codegen) ran against 2.3.0 and 1.20.5:
 
-- it generated the forwarders with Flink's names and compiled them in explicit-API mode;
+- it read 103 and 120 methods' parameter names from the class files;
+- it generated the forwarders with those names and compiled them in explicit-API mode;
 - it ran a job through them;
 - it refused each case above with its reason;
 - Kotlin callers got Flink's deprecation and experimental warnings;
@@ -211,3 +208,4 @@ These are sequencing questions that don't affect the architecture:
 - **Views after the first slice.** Which Flink types get views next: windows, `connect`, broadcast, joins.
 - **Typed sources.** Whether typed-source helpers are worth adding, given that Flink's typed `fromSource` is `@Experimental`.
 - **Overload selection.** Letting a view forward one overload of a name, which `broadcast()` needs.
+- **KDoc for generated forwarders.** The first version has none. One option is to link each forwarder to the Flink method it calls, with Dokka external links to the Javadoc Flink publishes for each line. The other is to copy Flink's Javadoc text. Copying adds attribution obligations, because that text is under the Apache License 2.0 with a NOTICE file and Flinkt is MIT-licensed. A copy also describes the Java method's return type rather than the view's.

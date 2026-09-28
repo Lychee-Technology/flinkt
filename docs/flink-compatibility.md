@@ -164,7 +164,7 @@ The adapters for all target lines are compiled from one shared source set. A per
 
 ### Differences between target lines
 
-Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
+Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/4cccdc5ec6438d2f76e6598b0373fd2b1f563471/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
 
 | Area | 1.20 | 2.2, 2.3 | Effect on the adapter |
 |---|---|---|---|
@@ -390,7 +390,7 @@ pass the release-tier suite on the 2.4 lane
 mark 2.4.x Supported target in the matrix
 ```
 
-The process should not assume compatibility merely because existing code compiles. Adopting a line starts by extracting its `flink-api.tsv` from its sources jar ([Parameter names](architecture.md#parameter-names)). Building the adapter then regenerates the view forwarders from the new line's classes. The diffs of the names file and of the adapter's API dump show what changed. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
+The process should not assume compatibility merely because existing code compiles. Adopting a line starts by extracting its `flink-api.tsv` from its class files ([Parameter names](architecture.md#parameter-names)). Building the adapter then regenerates the view forwarders from the new line's classes. The diffs of the names file and of the adapter's API dump show what changed. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/4cccdc5ec6438d2f76e6598b0373fd2b1f563471/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
 
 ```text
 Flink methods the views call: existence, signature, stability annotation
