@@ -207,7 +207,7 @@ These are decided with the serializer implementation, because each one fixes a p
 
 These are sequencing questions that don't affect the architecture:
 
-- **Views after the first slice.** Which Flink types get views next: windows, `connect`, broadcast, joins. Which type-introducing methods of the existing views get hand-written versions, such as `getSideOutput`. The generator refuses these, so until then they're reached through `asFlink()`.
+- **Views after the first slice.** Which Flink types get views next: windows, `connect`, broadcast, joins. Which type-introducing methods of the existing views get hand-written versions, such as `getSideOutput`. The generator refuses these, so until then they're reached through `asFlink()`. A side output's element type comes from its `OutputTag`, not from the call. `OutputTag(id)` takes that type from Flink's `TypeExtractor` on 1.20 and 2.3, and `OutputTag(id, typeInfo<T>())` doesn't, so the design has to cover how tags are built.
 - **Typed sources.** Whether typed-source helpers are worth adding, given that Flink's typed `fromSource` is `@Experimental`.
 - **Overload selection.** Letting a view forward one overload of a name, which `broadcast()` needs.
 - **KDoc for generated forwarders.** The first version has none. One option is to link each forwarder to the Flink method it calls, with Dokka external links to the Javadoc Flink publishes for each line. The other is to copy Flink's Javadoc text. Copying adds attribution obligations, because that text is under the Apache License 2.0 with a NOTICE file and Flinkt is MIT-licensed. A copy also describes the Java method's return type rather than the view's.
