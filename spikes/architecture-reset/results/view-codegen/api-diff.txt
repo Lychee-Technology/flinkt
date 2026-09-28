@@ -1,1 +1,14 @@
-identical
+1a2,3
+> public fun assignTimestampsAndWatermarks(timestampAndWatermarkAssigner: AssignerWithPeriodicWatermarks<T>): FlinktSingleOutputStreamOperator<T>
+> public fun assignTimestampsAndWatermarks(timestampAndWatermarkAssigner: AssignerWithPunctuatedWatermarks<T>): FlinktSingleOutputStreamOperator<T>
+11a14,15
+> public fun <K> partitionCustom(partitioner: Partitioner<K>, `field`: Int): FlinktDataStream<T>
+> public fun <K> partitionCustom(partitioner: Partitioner<K>, `field`: String): FlinktDataStream<T>
+27,28c31,34
+< public fun sinkTo(sink: Sink<T>, customSinkOperatorUidHashes: CustomSinkOperatorUidHashes): DataStreamSink<T>
+< public fun sinkTo(sink: Sink<T>): DataStreamSink<T>
+---
+> public fun sinkTo(sink: Sink2Sink<T>, customSinkOperatorUidHashes: CustomSinkOperatorUidHashes): DataStreamSink<T>
+> public fun sinkTo(sink: Sink2Sink<T>): DataStreamSink<T>
+> public fun sinkTo(sink: SinkSink<T, *, *, *>, customSinkOperatorUidHashes: CustomSinkOperatorUidHashes): DataStreamSink<T>
+> public fun sinkTo(sink: SinkSink<T, *, *, *>): DataStreamSink<T>

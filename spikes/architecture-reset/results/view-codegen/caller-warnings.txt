@@ -1,0 +1,4 @@
+== 1.20: calling a forwarder of a Flink-deprecated method
+w: neg/deprecated-call/UseDeprecated.kt:8:10 'fun <K> partitionCustom(partitioner: Partitioner<K>, field: Int): FlinktDataStream<Long>' is deprecated. Deprecated in Apache Flink: DataStream.partitionCustom.
+== 2.3: calling a forwarder of a Flink @Experimental method, without and with @OptIn
+w: neg/experimental-call/UseExperimental.kt:7:76 Calls a Flink API that Apache Flink marks @Experimental; it may change between Flink minor releases.

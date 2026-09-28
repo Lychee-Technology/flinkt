@@ -3,4 +3,4 @@ pluginManagement {
 }
 dependencyResolutionManagement { repositories { mavenCentral() } }
 rootProject.name = "view-codegen-spike"
-include(":annotations", ":processor", ":views-f23", ":views-f120")
+include(":annotations", ":processor", ":views-f23", ":views-f120", ":extractor")

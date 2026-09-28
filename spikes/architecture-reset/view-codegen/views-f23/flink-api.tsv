@@ -1,0 +1,105 @@
+# Flink 2.3.0 stream API, extracted from flink-runtime-2.3.0-sources.jar. Regenerate; do not edit.
+# flink-version	2.3.0
+org.apache.flink.streaming.api.datastream.DataStream	addSink	(Lorg/apache/flink/streaming/api/functions/sink/legacy/SinkFunction;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sinkFunction
+org.apache.flink.streaming.api.datastream.DataStream	assignTimestampsAndWatermarks	(Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	watermarkStrategy
+org.apache.flink.streaming.api.datastream.DataStream	broadcast	()Lorg/apache/flink/streaming/api/datastream/DataStream;	
+org.apache.flink.streaming.api.datastream.DataStream	broadcast	([Lorg/apache/flink/api/common/state/MapStateDescriptor;)Lorg/apache/flink/streaming/api/datastream/BroadcastStream;	broadcastStateDescriptors
+org.apache.flink.streaming.api.datastream.DataStream	coGroup	(Lorg/apache/flink/streaming/api/datastream/DataStream;)Lorg/apache/flink/streaming/api/datastream/CoGroupedStreams;	otherStream
+org.apache.flink.streaming.api.datastream.DataStream	collectAsync	()Lorg/apache/flink/util/CloseableIterator;	
+org.apache.flink.streaming.api.datastream.DataStream	collectAsync	(Lorg/apache/flink/streaming/api/datastream/DataStream$Collector;)V	collector
+org.apache.flink.streaming.api.datastream.DataStream	connect	(Lorg/apache/flink/streaming/api/datastream/BroadcastStream;)Lorg/apache/flink/streaming/api/datastream/BroadcastConnectedStream;	broadcastStream
+org.apache.flink.streaming.api.datastream.DataStream	connect	(Lorg/apache/flink/streaming/api/datastream/DataStream;)Lorg/apache/flink/streaming/api/datastream/ConnectedStreams;	dataStream
+org.apache.flink.streaming.api.datastream.DataStream	countWindowAll	(J)Lorg/apache/flink/streaming/api/datastream/AllWindowedStream;	size
+org.apache.flink.streaming.api.datastream.DataStream	countWindowAll	(JJ)Lorg/apache/flink/streaming/api/datastream/AllWindowedStream;	size,slide
+org.apache.flink.streaming.api.datastream.DataStream	executeAndCollect	()Lorg/apache/flink/util/CloseableIterator;	
+org.apache.flink.streaming.api.datastream.DataStream	executeAndCollect	(I)Ljava/util/List;	limit
+org.apache.flink.streaming.api.datastream.DataStream	executeAndCollect	(Ljava/lang/String;)Lorg/apache/flink/util/CloseableIterator;	jobExecutionName
+org.apache.flink.streaming.api.datastream.DataStream	executeAndCollect	(Ljava/lang/String;I)Ljava/util/List;	jobExecutionName,limit
+org.apache.flink.streaming.api.datastream.DataStream	filter	(Lorg/apache/flink/api/common/functions/FilterFunction;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	filter
+org.apache.flink.streaming.api.datastream.DataStream	flatMap	(Lorg/apache/flink/api/common/functions/FlatMapFunction;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	flatMapper
+org.apache.flink.streaming.api.datastream.DataStream	flatMap	(Lorg/apache/flink/api/common/functions/FlatMapFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	flatMapper,outputType
+org.apache.flink.streaming.api.datastream.DataStream	forward	()Lorg/apache/flink/streaming/api/datastream/DataStream;	
+org.apache.flink.streaming.api.datastream.DataStream	fullWindowPartition	()Lorg/apache/flink/streaming/api/datastream/PartitionWindowedStream;	
+org.apache.flink.streaming.api.datastream.DataStream	getExecutionConfig	()Lorg/apache/flink/api/common/ExecutionConfig;	
+org.apache.flink.streaming.api.datastream.DataStream	getExecutionEnvironment	()Lorg/apache/flink/streaming/api/environment/StreamExecutionEnvironment;	
+org.apache.flink.streaming.api.datastream.DataStream	getId	()I	
+org.apache.flink.streaming.api.datastream.DataStream	getMinResources	()Lorg/apache/flink/api/common/operators/ResourceSpec;	
+org.apache.flink.streaming.api.datastream.DataStream	getParallelism	()I	
+org.apache.flink.streaming.api.datastream.DataStream	getPreferredResources	()Lorg/apache/flink/api/common/operators/ResourceSpec;	
+org.apache.flink.streaming.api.datastream.DataStream	getTransformation	()Lorg/apache/flink/api/dag/Transformation;	
+org.apache.flink.streaming.api.datastream.DataStream	getType	()Lorg/apache/flink/api/common/typeinfo/TypeInformation;	
+org.apache.flink.streaming.api.datastream.DataStream	global	()Lorg/apache/flink/streaming/api/datastream/DataStream;	
+org.apache.flink.streaming.api.datastream.DataStream	join	(Lorg/apache/flink/streaming/api/datastream/DataStream;)Lorg/apache/flink/streaming/api/datastream/JoinedStreams;	otherStream
+org.apache.flink.streaming.api.datastream.DataStream	keyBy	(Lorg/apache/flink/api/java/functions/KeySelector;)Lorg/apache/flink/streaming/api/datastream/KeyedStream;	key
+org.apache.flink.streaming.api.datastream.DataStream	keyBy	(Lorg/apache/flink/api/java/functions/KeySelector;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/KeyedStream;	key,keyType
+org.apache.flink.streaming.api.datastream.DataStream	map	(Lorg/apache/flink/api/common/functions/MapFunction;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	mapper
+org.apache.flink.streaming.api.datastream.DataStream	map	(Lorg/apache/flink/api/common/functions/MapFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	mapper,outputType
+org.apache.flink.streaming.api.datastream.DataStream	partitionCustom	(Lorg/apache/flink/api/common/functions/Partitioner;Lorg/apache/flink/api/java/functions/KeySelector;)Lorg/apache/flink/streaming/api/datastream/DataStream;	partitioner,keySelector
+org.apache.flink.streaming.api.datastream.DataStream	print	()Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	
+org.apache.flink.streaming.api.datastream.DataStream	print	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sinkIdentifier
+org.apache.flink.streaming.api.datastream.DataStream	printToErr	()Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	
+org.apache.flink.streaming.api.datastream.DataStream	printToErr	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sinkIdentifier
+org.apache.flink.streaming.api.datastream.DataStream	process	(Lorg/apache/flink/streaming/api/functions/ProcessFunction;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	processFunction
+org.apache.flink.streaming.api.datastream.DataStream	process	(Lorg/apache/flink/streaming/api/functions/ProcessFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	processFunction,outputType
+org.apache.flink.streaming.api.datastream.DataStream	project	([I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	fieldIndexes
+org.apache.flink.streaming.api.datastream.DataStream	rebalance	()Lorg/apache/flink/streaming/api/datastream/DataStream;	
+org.apache.flink.streaming.api.datastream.DataStream	rescale	()Lorg/apache/flink/streaming/api/datastream/DataStream;	
+org.apache.flink.streaming.api.datastream.DataStream	shuffle	()Lorg/apache/flink/streaming/api/datastream/DataStream;	
+org.apache.flink.streaming.api.datastream.DataStream	sinkTo	(Lorg/apache/flink/api/connector/sink2/Sink;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sink
+org.apache.flink.streaming.api.datastream.DataStream	sinkTo	(Lorg/apache/flink/api/connector/sink2/Sink;Lorg/apache/flink/streaming/api/datastream/CustomSinkOperatorUidHashes;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sink,customSinkOperatorUidHashes
+org.apache.flink.streaming.api.datastream.DataStream	transform	(Ljava/lang/String;Lorg/apache/flink/api/common/typeinfo/TypeInformation;Lorg/apache/flink/streaming/api/operators/OneInputStreamOperator;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	operatorName,outTypeInfo,operator
+org.apache.flink.streaming.api.datastream.DataStream	transform	(Ljava/lang/String;Lorg/apache/flink/api/common/typeinfo/TypeInformation;Lorg/apache/flink/streaming/api/operators/OneInputStreamOperatorFactory;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	operatorName,outTypeInfo,operatorFactory
+org.apache.flink.streaming.api.datastream.DataStream	union	([Lorg/apache/flink/streaming/api/datastream/DataStream;)Lorg/apache/flink/streaming/api/datastream/DataStream;	streams
+org.apache.flink.streaming.api.datastream.DataStream	windowAll	(Lorg/apache/flink/streaming/api/windowing/assigners/WindowAssigner;)Lorg/apache/flink/streaming/api/datastream/AllWindowedStream;	assigner
+org.apache.flink.streaming.api.datastream.DataStream	writeToSocket	(Ljava/lang/String;ILorg/apache/flink/api/common/serialization/SerializationSchema;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	hostName,port,schema
+org.apache.flink.streaming.api.datastream.DataStream	writeUsingOutputFormat	(Lorg/apache/flink/api/common/io/OutputFormat;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	format
+org.apache.flink.streaming.api.datastream.KeyedStream	addSink	(Lorg/apache/flink/streaming/api/functions/sink/legacy/SinkFunction;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sinkFunction
+org.apache.flink.streaming.api.datastream.KeyedStream	asQueryableState	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/QueryableStateStream;	queryableStateName
+org.apache.flink.streaming.api.datastream.KeyedStream	asQueryableState	(Ljava/lang/String;Lorg/apache/flink/api/common/state/ReducingStateDescriptor;)Lorg/apache/flink/streaming/api/datastream/QueryableStateStream;	queryableStateName,stateDescriptor
+org.apache.flink.streaming.api.datastream.KeyedStream	asQueryableState	(Ljava/lang/String;Lorg/apache/flink/api/common/state/ValueStateDescriptor;)Lorg/apache/flink/streaming/api/datastream/QueryableStateStream;	queryableStateName,stateDescriptor
+org.apache.flink.streaming.api.datastream.KeyedStream	countWindow	(J)Lorg/apache/flink/streaming/api/datastream/WindowedStream;	size
+org.apache.flink.streaming.api.datastream.KeyedStream	countWindow	(JJ)Lorg/apache/flink/streaming/api/datastream/WindowedStream;	size,slide
+org.apache.flink.streaming.api.datastream.KeyedStream	enableAsyncState	()Lorg/apache/flink/streaming/api/datastream/KeyedStream;	
+org.apache.flink.streaming.api.datastream.KeyedStream	flatMap	(Lorg/apache/flink/api/common/functions/FlatMapFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	flatMapper,outputType
+org.apache.flink.streaming.api.datastream.KeyedStream	fullWindowPartition	()Lorg/apache/flink/streaming/api/datastream/PartitionWindowedStream;	
+org.apache.flink.streaming.api.datastream.KeyedStream	getKeySelector	()Lorg/apache/flink/api/java/functions/KeySelector;	
+org.apache.flink.streaming.api.datastream.KeyedStream	getKeyType	()Lorg/apache/flink/api/common/typeinfo/TypeInformation;	
+org.apache.flink.streaming.api.datastream.KeyedStream	intervalJoin	(Lorg/apache/flink/streaming/api/datastream/KeyedStream;)Lorg/apache/flink/streaming/api/datastream/KeyedStream$IntervalJoin;	otherStream
+org.apache.flink.streaming.api.datastream.KeyedStream	max	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMax
+org.apache.flink.streaming.api.datastream.KeyedStream	max	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	field
+org.apache.flink.streaming.api.datastream.KeyedStream	maxBy	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMaxBy
+org.apache.flink.streaming.api.datastream.KeyedStream	maxBy	(IZ)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMaxBy,first
+org.apache.flink.streaming.api.datastream.KeyedStream	maxBy	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMaxBy
+org.apache.flink.streaming.api.datastream.KeyedStream	maxBy	(Ljava/lang/String;Z)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	field,first
+org.apache.flink.streaming.api.datastream.KeyedStream	min	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMin
+org.apache.flink.streaming.api.datastream.KeyedStream	min	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	field
+org.apache.flink.streaming.api.datastream.KeyedStream	minBy	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMinBy
+org.apache.flink.streaming.api.datastream.KeyedStream	minBy	(IZ)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMinBy,first
+org.apache.flink.streaming.api.datastream.KeyedStream	minBy	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToMinBy
+org.apache.flink.streaming.api.datastream.KeyedStream	minBy	(Ljava/lang/String;Z)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	field,first
+org.apache.flink.streaming.api.datastream.KeyedStream	process	(Lorg/apache/flink/streaming/api/functions/KeyedProcessFunction;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	keyedProcessFunction
+org.apache.flink.streaming.api.datastream.KeyedStream	process	(Lorg/apache/flink/streaming/api/functions/KeyedProcessFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	keyedProcessFunction,outputType
+org.apache.flink.streaming.api.datastream.KeyedStream	reduce	(Lorg/apache/flink/api/common/functions/ReduceFunction;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	reducer
+org.apache.flink.streaming.api.datastream.KeyedStream	sum	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	positionToSum
+org.apache.flink.streaming.api.datastream.KeyedStream	sum	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	field
+org.apache.flink.streaming.api.datastream.KeyedStream	window	(Lorg/apache/flink/streaming/api/windowing/assigners/WindowAssigner;)Lorg/apache/flink/streaming/api/datastream/WindowedStream;	assigner
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	addMetricVariable	(Ljava/lang/String;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	key,value
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	cache	()Lorg/apache/flink/streaming/api/datastream/CachedDataStream;	
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	disableChaining	()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	enableAsyncState	()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	forceNonParallel	()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	getName	()Ljava/lang/String;	
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	getSideOutput	(Lorg/apache/flink/util/OutputTag;)Lorg/apache/flink/streaming/api/datastream/SideOutputDataStream;	sideOutputTag
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	name	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	name
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	returns	(Ljava/lang/Class;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	typeClass
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	returns	(Lorg/apache/flink/api/common/typeinfo/TypeHint;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	typeHint
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	returns	(Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	typeInfo
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	setBufferTimeout	(J)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	timeoutMillis
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	setDescription	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	description
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	setMaxParallelism	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	maxParallelism
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	setParallelism	(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	parallelism
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	setUidHash	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	uidHash
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	slotSharingGroup	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	slotSharingGroup
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	slotSharingGroup	(Lorg/apache/flink/api/common/operators/SlotSharingGroup;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	slotSharingGroup
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	startNewChain	()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	
+org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator	uid	(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	uid

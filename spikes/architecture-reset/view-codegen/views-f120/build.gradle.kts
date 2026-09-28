@@ -12,7 +12,12 @@ kotlin {
     (findProperty("negCase") as String?)?.let { sourceSets["main"].kotlin.srcDir("../neg/$it") }
 }
 java { targetCompatibility = JavaVersion.VERSION_17 }
+// The extracted API file is a tracked input: editing or regenerating it re-runs KSP.
+class FlinkApiFile(@get:InputFile @get:PathSensitive(PathSensitivity.RELATIVE) val file: File) : CommandLineArgumentProvider {
+    override fun asArguments() = listOf("flinkt.flinkApi=${file.absolutePath}")
+}
 ksp {
+    arg(FlinkApiFile(file((findProperty("flinkApiFile") as String?) ?: "flink-api.tsv")))
     arg("flinkt.flinkVersion", "1.20.5")
     (findProperty("extraForward") as String?)?.let { arg("flinkt.extraForward", it) }
 }

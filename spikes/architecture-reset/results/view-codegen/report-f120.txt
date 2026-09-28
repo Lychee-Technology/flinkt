@@ -16,9 +16,9 @@ Flink 1.20.5
   org.apache.flink.streaming.api.datastream.DataStream.global() -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
     generated -> flinkt.views.FlinktDataStream<T>
   org.apache.flink.streaming.api.datastream.DataStream.partitionCustom(p0: (Partitioner<(K..K?)>..Partitioner<(K..K?)>?), p1: Int) -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[Deprecated]
-    skipped: deprecated
+    generated -> flinkt.views.FlinktDataStream<T> (deprecated)
   org.apache.flink.streaming.api.datastream.DataStream.partitionCustom(p0: (Partitioner<(K..K?)>..Partitioner<(K..K?)>?), p1: (String..String?)) -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[Deprecated]
-    skipped: deprecated
+    generated -> flinkt.views.FlinktDataStream<T> (deprecated)
   org.apache.flink.streaming.api.datastream.DataStream.partitionCustom(p0: (Partitioner<(K..K?)>..Partitioner<(K..K?)>?), p1: (KeySelector<(T..T?), (K..K?)>..KeySelector<(T..T?), (K..K?)>?)) -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[]
     generated -> flinkt.views.FlinktDataStream<T>
   org.apache.flink.streaming.api.datastream.DataStream.partitionCustom(p0: (Partitioner<(K..K?)>..Partitioner<(K..K?)>?), p1: (Keys<(T..T?)>..Keys<(T..T?)>?)) -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PRIVATE, OPEN] @[]
@@ -26,13 +26,17 @@ Flink 1.20.5
   org.apache.flink.streaming.api.datastream.DataStream.assignTimestampsAndWatermarks(p0: (WatermarkStrategy<(T..T?)>..WatermarkStrategy<(T..T?)>?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
     generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
   org.apache.flink.streaming.api.datastream.DataStream.assignTimestampsAndWatermarks(p0: (AssignerWithPeriodicWatermarks<(T..T?)>..AssignerWithPeriodicWatermarks<(T..T?)>?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[Deprecated]
-    skipped: deprecated
+    note: signature uses deprecated type org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks; forwarded as Flink declares it
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T> (deprecated)
   org.apache.flink.streaming.api.datastream.DataStream.assignTimestampsAndWatermarks(p0: (AssignerWithPunctuatedWatermarks<(T..T?)>..AssignerWithPunctuatedWatermarks<(T..T?)>?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[Deprecated]
-    skipped: deprecated
+    note: signature uses deprecated type org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks; forwarded as Flink declares it
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T> (deprecated)
   org.apache.flink.streaming.api.datastream.DataStream.sinkTo(p0: (Sink<(T..T?), *, *, *>..Sink<(T..T?), *, *, *>?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
-    skipped: signature uses deprecated type org.apache.flink.api.connector.sink.Sink
+    note: signature uses deprecated type org.apache.flink.api.connector.sink.Sink; forwarded as Flink declares it
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
   org.apache.flink.streaming.api.datastream.DataStream.sinkTo(p0: (Sink<(T..T?), *, *, *>..Sink<(T..T?), *, *, *>?), p1: (CustomSinkOperatorUidHashes..CustomSinkOperatorUidHashes?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
-    skipped: signature uses deprecated type org.apache.flink.api.connector.sink.Sink
+    note: signature uses deprecated type org.apache.flink.api.connector.sink.Sink; forwarded as Flink declares it
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
   org.apache.flink.streaming.api.datastream.DataStream.sinkTo(p0: (Sink<(T..T?)>..Sink<(T..T?)>?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
     generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
   org.apache.flink.streaming.api.datastream.DataStream.sinkTo(p0: (Sink<(T..T?)>..Sink<(T..T?)>?), p1: (CustomSinkOperatorUidHashes..CustomSinkOperatorUidHashes?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]

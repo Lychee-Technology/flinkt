@@ -1,0 +1,9 @@
+== 1.20 adapter built with the 2.3 names file
+/tmp/claude-1000/-home-ruoshi-code-flinkt/48db61e5-fb06-48fd-b0e2-6d26ede00b0a/scratchpad/spike-wt/spikes/architecture-reset/view-codegen/views-f23/flink-api.tsv was extracted from Flink 2.3.0, but this adapter builds against Flink 1.20.5; regenerate it
+DataStream.partitionCustom(p0: (Partitioner<(K..K?)>..Partitioner<(K..K?)>?), p1: Int) has no entry DataStream#partitionCustom(Lorg/apache/flink/api/common/functions/Partitioner;I)Lorg/apache/flink/streaming/api/datastream/DataStream; in the extracted Flink API file; regenerate it for this Flink version
+== names file without the setParallelism entry
+SingleOutputStreamOperator.setParallelism(p0: Int) has no entry SingleOutputStreamOperator#setParallelism(I)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator; in the extracted Flink API file; regenerate it for this Flink version
+== editing the names file reruns KSP
+> Task :views-f23:kspKotlin
+fun setParallelism(renamedForTest
+fun setParallelism(parallelism
