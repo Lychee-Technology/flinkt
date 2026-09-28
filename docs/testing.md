@@ -454,6 +454,8 @@ A view operator that let Flink infer its type fails the comparison, and so does 
 
 **Entering and leaving change nothing.** For each type that can enter, including a side output, `x.flinkt().asFlink()` must be `x`, and the environment's transformations must be the same before and after entering.
 
+Those checks can't see a read of the stream's type, because the read changes neither the object nor the graph. It marks the type as used, and Flink then refuses a later `returns()` ([Views](architecture.md#views), rule 1). One more case covers this. Take a `SingleOutputStreamOperator` and a `DataStreamSource`, the entering types that have `returns()`, each with an output type Flink inferred. Enter each one, make a fluent call through the view, and leave. Then call `returns()` on the Flink object with a different `TypeInformation`. Flink must accept the call, and the output type must be the one passed. The fluent call covers a view wrapping what Flink returned. A type Flink couldn't infer won't do, because reading it throws at once and marks nothing.
+
 **Flink still acts on per-object state.** Every field listed in [State on stream objects](flink-compatibility.md#state-on-stream-objects) for the adapter's line gets a case. Where a view method sets or reads the field, the case makes that call through the view and shows the outcome of the same call on the Flink object. Where no view method touches the field, the case sets it on the Flink object before entering and shows that Flink still acts on it after a fluent call through the view:
 
 ```text
@@ -899,7 +901,7 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 **Compile tests:** Does the test prove which Kotlin overload is selected, or merely that some overload compiles? Where the design promises a compile error, does a negative compile test check it, or only a runtime rejection?
 
-**View behavior:** Would the test fail if a view method made a different Flink call than the code it stands for, or if entering a view built or changed a Flink object? Does an exact-type assertion actually reject a subtype?
+**View behavior:** Would the test fail if a view method made a different Flink call than the code it stands for, or if entering a view built a Flink object, changed one, or read its type? Does an exact-type assertion actually reject a subtype?
 
 **Type fallback:** Would the test fail if a generated type silently became generic/Kryo-serialized?
 

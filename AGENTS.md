@@ -36,7 +36,7 @@ Code and reviews are held to these rules. Each link goes to the canonical text:
 - **Keep the full Kotlin type**, including nested generic arguments and nullability. `T::class.java` is not enough. ([README](README.md#generic-types))
 - **Stable identity.** Sealed subtypes and enums need logical IDs, not declaration order or ordinals. ([README](README.md#sealed-types-and-enums))
 - **Strict state compatibility.** A structural change is incompatible until its migration is defined and tested against old bytes. ([README](README.md#schema-and-state-compatibility), [testing.md](docs/testing.md#serializer-snapshot-compatibility))
-- **Views change nothing Flink sees.** Never construct a Flink stream object or read a stream's type on entry. Call only public Flink methods. ([architecture.md](docs/architecture.md#views))
+- **Views change nothing Flink sees.** Never construct a Flink stream object or read the type of a stream a view wraps. Call only public Flink methods. ([architecture.md](docs/architecture.md#views))
 
 Still undecided, so don't present these as settled: [Open questions](docs/architecture.md#open-questions).
 

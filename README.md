@@ -736,7 +736,7 @@ Review should focus on the boundaries where Kotlin convenience can accidentally 
 
 **API resolution:** Does `stream.map { ... }`, or `stream.map(fn)`, select the view's overload, with the result type taken from the call site?
 
-**View discipline:** Does each view method make exactly one call on the Flink object the view holds, and wrap what Flink returned? Does any Flinkt code construct a Flink stream object, or read a stream's type on entry?
+**View discipline:** Does each view method make exactly one call on the Flink object the view holds, and wrap what Flink returned? Does any Flinkt code construct a Flink stream object, or read the type of a stream a view wraps?
 
 **Type propagation:** Whenever an operator introduces a new generic type, does Flink receive the complete `TypeInformation`, including nested generic arguments and nullability where relevant? Does the adapter reach it through a public Flink method?
 
