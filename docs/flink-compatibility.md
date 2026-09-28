@@ -17,6 +17,7 @@ The application API should remain the same across these adapters:
 
 ```kotlin
 stream
+    .flinkt()
     .map { transform(it) }
     .filter { it.valid }
     .keyBy { it.id }
@@ -114,31 +115,25 @@ The boundary keeps version-sensitive Flink APIs out of components that don't nee
 
 ### Version-independent modules
 
-The following concepts should avoid direct dependencies on a particular Flink minor line where practical:
+These have no dependency on Flink:
 
 ```text
-flinkt-annotations
-flinkt-schema
-flinkt-ksp
-generated type metadata
-generated codec SPI
-schema compatibility model
+flinkt-core    @FlinkType, schema and type model, generated-codec SPI
+flinkt-ksp     build time only
+generated codecs and schema metadata
 ```
 
-These layers describe Kotlin types and generated access patterns. They should not need to change because a method was added to `DataStream` or because a Flink serializer configuration API changed.
+These layers describe Kotlin types and generated access patterns. They should not need to change because a method was added to `DataStream` or because a Flink serializer configuration API changed. [Layers and modules](architecture.md#layers-and-modules) gives the reason for each module.
 
 ### Version-specific integration
 
-The Flink integration layer owns the APIs whose compatibility depends directly on Apache Flink:
+Each Flink adapter owns the APIs whose compatibility depends directly on Apache Flink:
 
 ```text
-DataStream façade
-SingleOutputStreamOperator façade
-KeyedStream façade
-TypeInformation integration
-TypeSerializer integration
-TypeSerializerSnapshot integration
-state descriptors
+views: FlinktDataStream, FlinktSingleOutputStreamOperator, FlinktKeyedStream
+typeInfo<T>() and TypeInformation integration
+TypeSerializer and TypeSerializerSnapshot for generated types
+state helpers
 Table API integration
 Flink runtime version checks
 ```
@@ -157,86 +152,44 @@ compile and compatibility tests
 
 The annotations, the Kotlin schema, the KSP model, and the application API should come through unchanged. If ordinary Flink minor upgrades repeatedly require changes above the adapter boundary, that boundary should be reconsidered.
 
-## Subtype façade and version compatibility
+## Views and version compatibility
 
-Flinkt deliberately uses a subtype façade so Kotlin code can keep Flink's original operator names:
+Flinkt's views hold Flink stream objects rather than extend Flink classes ([decision](architecture.md#decision-streams-are-views-not-flink-subtypes)). Each view method calls one Flink method on the object it holds, so a view depends only on the Flink methods it calls:
 
-```kotlin
-stream.map { ... }
-stream.filter { ... }
-stream.keyBy { ... }
-```
+- **Flink adds a method.** Existing view calls don't change. Users reach the new method through `asFlink()` until a view offers it.
+- **Flink removes or changes a method a view calls.** The adapter stops compiling for that line, which is caught before release and doesn't reach a user's job.
+- **Flink moves state between a stream object and its transformation.** Views don't copy either, so nothing needs updating. The adapter contract tests still check the known cases per line.
 
-Conceptually:
+The adapters for all target lines are compiled from one shared source set. A per-line source set holds only what differs between lines.
 
-```text
-DataStream<T>
-     ▲
-     │
-FlinktDataStream<T>
+### Differences between target lines
 
+Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/40cd1b72e0dd571e242e4d054021ced85e0ed248/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
 
-SingleOutputStreamOperator<T>
-     ▲
-     │
-FlinktSingleOutputStreamOperator<T>
-
-
-KeyedStream<T, K>
-     ▲
-     │
-FlinktKeyedStream<T, K>
-```
-
-This design produces better Kotlin source code, but it couples Flinkt more tightly to Flink's class hierarchy than a library of extension functions alone would be. The façade must therefore live in the version-specific Flink integration layer.
-
-When Flink changes constructors, abstract methods, `final` modifiers, return types, generic bounds, fluent configuration methods, the stream-returning methods, the class hierarchy, or the state kept on stream objects, the corresponding adapter must be recompiled and reviewed. Application code should not need to know which internal façade implementation is active.
+| Area | 1.20 | 2.2, 2.3 | Effect on the adapter |
+|---|---|---|---|
+| `TypeInformation` serializer factory | abstract `createSerializer(ExecutionConfig)`; `createSerializer(SerializerConfig)` has a default | abstract `createSerializer(SerializerConfig)` only | per-line base class for Flinkt's `TypeInformation` |
+| `TypeSerializerSnapshot.resolveSchemaCompatibility(snapshot)` | default method | abstract | implemented in both; no per-line code |
+| `enableAsyncState()` | absent | on `KeyedStream` and `SingleOutputStreamOperator`, `@Experimental` | 2.x source set only, if a view offers it |
+| Deprecated stream API | `keyBy(int...)`, `keyBy(String...)`, `timeWindow*`, `iterate`, `SinkFunction` sinks | removed; legacy `SourceFunction`/`SinkFunction` moved to `...legacy` packages | not offered by views |
 
 ### State on stream objects
 
-Flink keeps some configuration on its stream objects rather than on their `Transformation`. A second object built over the same transformation doesn't see it, so these fields decide what [adapting a Flink stream object](../README.md#adapting-flink-stream-objects) can reproduce. Checked against the Flink sources of the target lines:
+Flink keeps some configuration on stream objects rather than on their `Transformation`. A second object built over the same transformation doesn't see it, and that is why Flinkt never builds one.
 
-| Class | Field | Set by | Read by | Public read | Lines |
+| Class | Field | Visibility | Set by | Read by | Lines |
 |---|---|---|---|---|---|
-| `SingleOutputStreamOperator` | `nonParallel` | `forceNonParallel()`, which Flink also calls on `windowAll` results | `setParallelism`, `setMaxParallelism` | no (`protected`) | 1.20, 2.2, 2.3 |
-| `SingleOutputStreamOperator` | `requestedSideOutputs` | `getSideOutput` | `getSideOutput`, which rejects a known ID with a different type | no (`private`) | 1.20, 2.2, 2.3 |
-| `KeyedStream` | `keySelector`, `keyType` | constructor | keyed operators | yes | 1.20, 2.2, 2.3 |
-| `KeyedStream` | `isEnableAsyncState` | `enableAsyncState()` | keyed operators | no (package-private) | 2.2, 2.3 |
-| `DataStreamSource` | `isParallel` | constructor | `setParallelism` | no (package-private) | 1.20, 2.2, 2.3 |
+| `SingleOutputStreamOperator` | `nonParallel` | protected | `forceNonParallel()`, which Flink also calls on `windowAll` results | `setParallelism`, `setMaxParallelism` | 1.20, 2.2, 2.3 |
+| `SingleOutputStreamOperator` | `requestedSideOutputs` | private | `getSideOutput` | `getSideOutput`, which rejects a known ID with a different type | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `keySelector`, `keyType` | private, with public getters | constructor | keyed operators | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `isEnableAsyncState` | private | `enableAsyncState()` | keyed operators | 2.2, 2.3 |
+| `DataStreamSource` | `isParallel` | private | constructor | `setParallelism` | 1.20, 2.2, 2.3 |
 
-A `KeyedStream`'s `PartitionTransformation` behaves the same way. Its public constructors always create a new one, and only the package-private `@Internal` constructor accepts an existing one.
-
-New Flink minor lines can add fields here, as 2.0 added `isEnableAsyncState`. Adopting a line includes checking this table against its sources, and the adapter's [adapter contract tests](testing.md#flink-adapter-contract) cover every field listed for its line.
-
-### Façade exits
-
-A Flink method that the façade doesn't override returns Flink's own type, and the chain [leaves the façade](../README.md#where-the-façade-ends) there. Checked against the Flink sources of the target lines, `DataStream.union` is the only `final` method on `DataStream`, `SingleOutputStreamOperator`, and `KeyedStream` in 1.20, 2.2, and 2.3. It is therefore the only exit the subtype design forces.
-
-The other exits follow from which types the façade wraps. These methods return types it doesn't wrap:
-
-| Class | Methods | Returns | Lines |
-|---|---|---|---|
-| `DataStream` | `connect` | `ConnectedStreams`, `BroadcastConnectedStream` | 1.20, 2.2, 2.3 |
-| `DataStream` | `join`, `coGroup` | `JoinedStreams`, `CoGroupedStreams` | 1.20, 2.2, 2.3 |
-| `DataStream` | `windowAll`, `countWindowAll` | `AllWindowedStream` | 1.20, 2.2, 2.3 |
-| `DataStream` | `timeWindowAll` | `AllWindowedStream` | 1.20 |
-| `DataStream` | `broadcast(MapStateDescriptor...)` | `BroadcastStream` | 1.20, 2.2, 2.3 |
-| `DataStream` | `iterate` | `IterativeStream` | 1.20 |
-| `DataStream`, `KeyedStream` | `fullWindowPartition` | `PartitionWindowedStream` | 1.20, 2.2, 2.3 |
-| `SingleOutputStreamOperator` | `getSideOutput` | `SideOutputDataStream` | 1.20, 2.2, 2.3 |
-| `SingleOutputStreamOperator` | `cache` | `CachedDataStream` | 1.20, 2.2, 2.3 |
-| `KeyedStream` | `window`, `countWindow` | `WindowedStream` | 1.20, 2.2, 2.3 |
-| `KeyedStream` | `timeWindow` | `WindowedStream` | 1.20 |
-| `KeyedStream` | `intervalJoin` | `IntervalJoin` | 1.20, 2.2, 2.3 |
-| `KeyedStream` | `asQueryableState` | `QueryableStateStream` | 1.20, 2.2, 2.3 |
-
-`SideOutputDataStream` holds no state beyond the environment and the transformation, like the plain `DataStream` that `union` returns, so both re-enter the façade exactly. Flink's operators that take a function object and produce a new element type, such as `process(ProcessFunction)`, aren't in either table: whether they stay in the façade is open ([#3](https://github.com/Lychee-Technology/flinkt/issues/3)).
-
-The [exit inventory](testing.md#where-the-façade-ends) in each adapter's tests checks this list against the Flink classes the adapter compiles against. A new minor line that adds a stream-returning method fails that check until the method is either overridden or added here.
+A `KeyedStream`'s `PartitionTransformation` can't be shared either: its public constructors always create a new one. The [adapter contract tests](testing.md#flink-adapter-contract) cover each field listed for a line. Adopting a new line includes checking this table against its sources.
 
 ## Preserve fluent chains
 
-The façade must remain active through normal Flink configuration:
+The view must remain active through normal Flink configuration:
 
 ```kotlin
 stream
@@ -247,13 +200,11 @@ stream
     .filter { it.valid }
 ```
 
-If a Flink upgrade changes one of these fluent methods, the version adapter is responsible for preserving the Flinkt return type where appropriate. This is one of the primary compile-time compatibility checks for every new Flink minor release.
+A fluent method on a view calls the Flink method and returns a view of what Flink returned. When a Flink upgrade changes one of these methods, only the adapter changes. A fluent method the view doesn't offer yet is a compile error on the view and is available through `asFlink()`.
 
 ## Keep generated code independent where possible
 
-KSP-generated code should not bind itself to a specific Flink ABI unnecessarily. Don't make every generated class reproduce Flink runtime protocol code when that protocol can stay behind the adapter boundary.
-
-A useful separation is:
+KSP-generated code should not bind itself to a specific Flink ABI. The separation is:
 
 ```text
 User Kotlin source
@@ -262,17 +213,18 @@ User Kotlin source
        KSP
         │
         ▼
-User generated codec
+User generated codec          depends on flinkt-core and the JDK only
         │
-        │ stable Flinkt SPI
+        │ GeneratedCodec SPI  (java.io.DataInput / DataOutput)
         ▼
-Flinkt serializer adapter
+Flinkt TypeInformation,       one set per adapter, shared by every generated type
+TypeSerializer, snapshot
         │
         ▼
-Apache Flink TypeSerializer
+Apache Flink
 ```
 
-For example, generated code can read `User`'s fields and call its constructor directly, without owning all of Flink's `TypeSerializerSnapshot` compatibility logic:
+For example, generated code can read `User`'s fields and call its constructor directly, without owning any of Flink's `TypeSerializerSnapshot` compatibility logic:
 
 ```kotlin
 value.id
@@ -283,6 +235,8 @@ User(
     name = ...,
 )
 ```
+
+This separation is required rather than just tidy. `TypeInformation`'s abstract methods differ between 1.20 and 2.x (see the table above), so a generated `TypeInformation` subclass would need a separate build for each Flink line. Flink's `DataInputView` and `DataOutputView` implement `DataInput` and `DataOutput`, so the adapter passes them to generated code without copying.
 
 The main reason for code generation is to remove reflection from the record hot path. This separation keeps that job apart from Flink-version-specific runtime contracts.
 
@@ -302,6 +256,8 @@ Apache Flink's API stability annotations decide where, and whether, Flinkt may d
 
 Experimental Flink APIs should not be part of Flinkt's stable public contract. If Flinkt exposes functionality built on an experimental Flink API, that functionality should also be explicitly experimental.
 
+`StreamExecutionEnvironment.fromSource(…, TypeInformation)` is `@Experimental` on every target line, and it's the reason Flinkt has no environment view ([Views](architecture.md#views)). `enableAsyncState()` in 2.x is `@Experimental` too.
+
 ### `@Internal`
 
 Depending on Flink `@Internal` APIs is discouraged. If an internal API is unavoidable, the dependency must:
@@ -312,6 +268,8 @@ Depending on Flink `@Internal` APIs is discouraged. If an internal API is unavoi
 4. be replaceable without changing Flinkt's public Kotlin API.
 
 An internal Flink API must never become part of Flinkt's own public ABI.
+
+Watch for `@Internal` on individual methods of public classes. On `DataStream` and `KeyedStream`, `process(fn, TypeInformation)` is `@Internal` in 1.20, 2.2, and 2.3, while the one-argument `process(fn)` and `returns(TypeInformation)` are public. Views therefore type `process` with `process(fn).returns(typeInfo<R>())`. The adapter currently needs no `@Internal` API, and a [test](testing.md#flink-adapter-contract) checks every Flink method it calls. Flink 1.20's stability annotations have class retention, so that test reads them from bytecode.
 
 ## Do not build correctness around `TypeExtractor`
 
@@ -358,6 +316,8 @@ generated data-class serializers
 ```
 
 Flink type extraction can still be used where appropriate, but it is not the foundation of Flinkt's Kotlin type system.
+
+`TypeExtractor` still runs inside some Flink methods that views call. Flink's one-argument `process(fn)` infers a type, which is `GenericType` for a Kotlin data class, and the view replaces it with `returns()` before anything reads it. The [adapter contract](testing.md#flink-adapter-contract) checks the final output type, not the path to it.
 
 ## Dependency packaging
 
@@ -426,14 +386,11 @@ pass the release-tier suite on the 2.4 lane
 mark 2.4.x Supported target in the matrix
 ```
 
-The process should not assume compatibility merely because existing code compiles. Particular attention should go to:
+The process should not assume compatibility merely because existing code compiles. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/40cd1b72e0dd571e242e4d054021ced85e0ed248/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
 
 ```text
-DataStream hierarchy
-SingleOutputStreamOperator fluent API
-KeyedStream
+Flink methods the views call: existence, signature, stability annotation
 state kept on stream objects
-façade exits
 TypeInformation
 TypeSerializer
 TypeSerializerSnapshot
@@ -457,7 +414,7 @@ A Flink major release, such as the move from 1.x to 2.x, is a migration boundary
 Flinkt should expect the following layers to need independent adaptation:
 
 ```text
-DataStream façade
+views
 TypeInformation bindings
 serializer runtime bindings
 state APIs
@@ -489,21 +446,21 @@ Every target minor line gets its own build and integration lane:
 A successful compile is not enough. The compatibility suite should exercise the contracts Flinkt adds on top of Flink:
 
 ```text
+entering and leaving views
 map
-flatMap
 filter
 keyBy
 process
 name
 uid
 parallelism configuration
-state descriptors
+state helpers
 typeInfo<T>()
 generated serializers
 generated type registry
 ```
 
-The suite should verify both overload resolution and the actual type information visible to Flink.
+The suite should verify both overload resolution and the actual type information visible to Flink. Which tests run on which lane, and in which CI tier, is defined in [testing.md](testing.md#ci-tiers).
 
 ## API compatibility and state compatibility are different
 

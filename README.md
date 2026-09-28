@@ -7,15 +7,13 @@ Flinkt is a Kotlin-focused integration layer for Apache Flink. It keeps Flink's 
 Application code should look like ordinary Flink code:
 
 ```kotlin
-val events =
+val sessions =
     env.fromSource(
         source,
         watermarkStrategy,
         "events",
     )
-
-val sessions =
-    events
+        .flinkt()
         .filter { it.payload.isNotBlank() }
         .map {
             UserEvent(
@@ -27,7 +25,11 @@ val sessions =
         .uid("normalize-v1")
         .keyBy { it.userId }
         .process(SessionFunction())
+
+sessions.asFlink().sinkTo(sink)
 ```
+
+`.flinkt()` gives Kotlin a view of the Flink stream, and `.asFlink()` hands back the Flink object. Between the two, every operator that produces a new element type passes Flink the complete Kotlin type.
 
 ## Why
 
@@ -84,12 +86,11 @@ map
 filter
 keyBy
 process
-connect
 union
 rebalance
 ```
 
-Flinkt should use the same name unless Kotlin introduces a concrete ambiguity that cannot be resolved safely.
+Flinkt uses the same name unless Kotlin introduces a concrete ambiguity that cannot be resolved safely.
 
 Existing Flink concepts such as operator UIDs, parallelism, state lifecycle, checkpoints, `ProcessFunction`, `TypeInformation`, and `TypeSerializer` remain visible.
 
@@ -115,129 +116,36 @@ This list is the intended scope. What is actually supported will depend on the i
 
 ---
 
-## DataStream façade
+## Flinkt streams
 
-An extension function cannot replace Flink's existing `DataStream.map`, `keyBy`, and similar member functions. Kotlin gives callable members precedence over extensions.
+### A view of one Flink object
 
-Flinkt therefore uses thin Flink subtypes:
+`.flinkt()` gives a Kotlin view of a Flink stream. Kotlin chooses the view from the static type:
 
-```text
-DataStream<T>
-     ▲
-     │
-FlinktDataStream<T>
+| Flink object | View |
+|---|---|
+| `DataStream<T>` | `FlinktDataStream<T>` |
+| `SingleOutputStreamOperator<T>` | `FlinktSingleOutputStreamOperator<T>` |
+| `KeyedStream<T, K>` | `FlinktKeyedStream<T, K>` |
 
-
-SingleOutputStreamOperator<T>
-     ▲
-     │
-FlinktSingleOutputStreamOperator<T>
-
-
-KeyedStream<T, K>
-     ▲
-     │
-FlinktKeyedStream<T, K>
-```
-
-These are still Flink streams.
-
-A `FlinktDataStream<User>` is also a `DataStream<User>` and can be passed directly to existing Flink APIs.
-
-The façade adds Kotlin overloads with the original operator names. Conceptually:
+Any object of these classes can enter: a source, a side output, the result of `union`, a keyed stream built anywhere, or a subclass. The view holds that object and nothing else, and `asFlink()` returns the same instance with its Flink type:
 
 ```kotlin
-inline fun <reified R> map(
-    transform: (T) -> R,
-): FlinktSingleOutputStreamOperator<R>
+val parsed: SingleOutputStreamOperator<Event> = ...
+
+val events = parsed.flinkt()        // FlinktSingleOutputStreamOperator<Event>
+check(events.asFlink() === parsed)
 ```
 
-can delegate to Flink with explicit output type information:
+Entering creates no Flink object, adds no transformation, and reads nothing from the stream. Everything Flink knows about the stream stays on Flink's object: its partitioning, a `forceNonParallel()` flag, the side outputs already requested. A view is not a `DataStream`. To pass one to an API that expects a `DataStream`, call `asFlink()`.
 
-```text
-Kotlin lambda
-     │
-     ├── MapFunction<T, R>
-     │
-     └── typeInfo<R>()
-              │
-              ▼
-        Flink DataStream.map
-```
+An earlier version of this design made each Flinkt stream a subclass of the Flink class. A subclass has to be a second Flink object, and Flink keeps state on stream objects that a second object doesn't have. A subclass also inherits every Flink method under the same name, so users couldn't tell which calls get Kotlin types. [Architecture](docs/architecture.md#decision-streams-are-views-not-flink-subtypes) records the evidence and the alternatives.
 
-Flink still owns the transformation and execution semantics.
+### Flink's names, Flink's behavior
 
-### Enter once
+Each view method makes one call to the Flink method of the same name on the object it holds, and wraps the object Flink returns. Flink's own checks apply. After `op.forceNonParallel()`, `op.flinkt().setParallelism(2)` fails exactly as `op.setParallelism(2)` does.
 
-Applications should enter the Kotlin façade at a boundary rather than opt in on every operation.
-
-For example:
-
-```kotlin
-val env =
-    StreamExecutionEnvironment
-        .getExecutionEnvironment()
-        .flinkt()
-```
-
-Streams created through that environment stay Flinkt-aware until a call [leaves the façade](#where-the-façade-ends):
-
-```kotlin
-val users =
-    env.fromSource(
-        source,
-        watermarkStrategy,
-        "users",
-    )
-        .map { normalize(it) }
-        .filter { it.active }
-        .keyBy { it.id }
-```
-
-An existing Flink stream can also be adapted explicitly:
-
-```kotlin
-val users = existingStream.flinkt()
-```
-
-Entering changes the Kotlin-facing API type and nothing Flink sees. It copies no records, adds no transformation, and keeps every check Flink would have applied to the original object.
-
-For `env.flinkt()`, that means the result keeps working through the original environment. A `StreamExecutionEnvironment` holds the job's configuration and the list of transformations it will execute, so a second environment object would split the job in two.
-
-### Adapting Flink stream objects
-
-Sharing a stream's `Transformation` is not enough to make a new object behave like the original. Flink keeps some configuration on the stream object itself:
-
-```text
-SingleOutputStreamOperator   forceNonParallel() flag, side outputs already requested
-KeyedStream                  key selector, key type, enableAsyncState() flag (2.x)
-DataStreamSource             whether the source may run in parallel
-```
-
-Flink reads these fields when it validates configuration or builds later operators. After `op.forceNonParallel()`, `op.setParallelism(2)` fails. A second object built over `op`'s transformation starts with the flag cleared and would accept it. The public API exposes the key selector and key type but none of the other fields, and two objects can't share them. [State on stream objects](docs/flink-compatibility.md#state-on-stream-objects) records the fields for each target Flink line.
-
-A keyed stream's partitioning can't be shared either. `KeyedStream`'s public constructors always add a new `PartitionTransformation`, and only a package-private `@Internal` constructor accepts an existing one. A rebuilt copy isn't always equivalent: `DataStreamUtils.reinterpretAsKeyedStream` keys a stream through a forward partitioner, and rebuilding that stream through the public constructor hash-partitions it again, adding the shuffle the user avoided on purpose.
-
-Adaptation therefore follows the same rule as unsupported types. When the adapter can't reproduce a stream exactly, it fails with an explicit error instead of returning an approximation:
-
-- **Non-keyed streams**, including an existing `SingleOutputStreamOperator`, adapt to a `FlinktDataStream<T>` over the same environment and transformation. Those are all that a downstream operator reads, so operators added after adaptation are the ones Flink would have added. The adapted value doesn't offer `name`, `uid`, `setParallelism`, or `getSideOutput`. The operator itself stays configured through the original reference, where Flink's checks live.
-- **Keyed streams** are rejected, at compile time where the static type shows it. Streams keyed through the façade's own `keyBy` never need adapting. On a `KeyedStream` from elsewhere, Flink's own methods still work with an explicit `typeInfo<R>()`, and their results can enter the façade. Adapting the keyed stream itself would mean reaching Flink's package-private `@Internal` constructor, which the [dependency policy](docs/flink-compatibility.md#internal) discourages, and nothing needs that yet.
-- **The runtime class decides**, not the static type. A `KeyedStream` passed around as `DataStream<T>` is still rejected. Keyed operators take their key from the `KeyedStream` object, so an unkeyed view would silently lose keyed state. A class the adapter doesn't recognize is rejected too, rather than treated as its nearest known superclass.
-
-```kotlin
-val users =
-    parsed                // SingleOutputStreamOperator<Event>
-        .uid("parse-v1")
-        .setParallelism(4)
-        .flinkt()         // FlinktDataStream<Event>
-        .map { toUser(it) }
-```
-
-The façade's own operators wrap Flink objects too. The façade's `map` calls Flink's `map` and wraps the returned operator in a `FlinktSingleOutputStreamOperator`. Nothing else holds Flink's object, so no second reference can disagree, but the wrapper must start with the state Flink left on it. Flink does leave such state: it returns `windowAll` results already forced non-parallel. `windowAll` is an [exit](#where-the-façade-ends), so those results reach the façade only through `.flinkt()`, and the operator stays configured through Flink's own object. The façade's `keyBy` doesn't wrap anything. It builds its `FlinktKeyedStream` with the same public constructor that Flink's own `keyBy` uses, so it adds exactly one partitioning step.
-
-### Preserve fluent chains
-
-The façade only works if calls such as:
+Fluent configuration returns the view, so a chain stays in Flinkt:
 
 ```kotlin
 stream
@@ -248,38 +156,60 @@ stream
     .filter { it.valid }
 ```
 
-do not fall back to a plain Java `SingleOutputStreamOperator` halfway through the chain.
+### Where result types come from
 
-Relevant fluent configuration methods therefore need covariant return types in the façade.
-
-This creates maintenance work whenever Flink changes its fluent API. The cost is deliberate, and preferable to renamed operators throughout application code.
-
-### Where the façade ends
-
-A chain stays in the façade only while each call returns a façade type. A call that returns a plain Flink type is an exit. The operators after it are Flink's own, and Flink infers their result types with its `TypeExtractor` unless the caller passes a `TypeInformation`.
-
-Two kinds of call are exits:
-
-- **`union`.** Flink declares it `final`, which `@SafeVarargs` requires of a public method, so no subtype can override it. It returns a newly built plain `DataStream<T>`. This is true in every target line.
-- **Calls that return a type the façade doesn't wrap.** The façade wraps `DataStream`, `SingleOutputStreamOperator`, and `KeyedStream`, so `connect`, `join`, `windowAll`, `window`, and `getSideOutput` all leave it.
-
-[Façade exits](docs/flink-compatibility.md#façade-exits) lists the exits for each target line. After an exit, the chain re-enters explicitly:
+Each operator that introduces an element type has one overload, and it takes Flink's own function type. A Kotlin lambda converts to that type, and a Flink function object is passed as it is. Either way, the compiler knows the result type at the call site, and Flinkt passes `typeInfo<R>()` for it to Flink:
 
 ```kotlin
-val users =
-    events
-        .union(replayedEvents)  // DataStream<Event>, Flink's own type
-        .flinkt()               // FlinktDataStream<Event>
-        .map { User(id = it.id, name = it.name) }
+events.map { User(it.id, it.name) }     // R = User, from the lambda
+events.map(ToUser())                    // R = User, from ToUser : MapFunction<Event, User>
+users.keyBy { it.id }                   // K = Long
+keyed.process(SessionFunction())        // R = Session, from SessionFunction : KeyedProcessFunction<Long, User, Session>
 ```
 
-Re-entering after `union` is exact. Flink requires every input of `union` to have the same `TypeInformation`, so the element type is still the one the façade gave the inputs. The plain `DataStream` that `union` returns holds only the environment and the transformation.
+When the type isn't known at the call site, for example inside generic code, the call doesn't compile. The overload with an explicit `TypeInformation` covers that case:
 
-Flinkt can't turn an exit into a compile error. Without `.flinkt()`, `events.union(replayedEvents).map { User(...) }` still compiles, because Flink's own `map` accepts the lambda. Flink then infers `User` with its `TypeExtractor`, which [the compatibility policy](docs/flink-compatibility.md#do-not-build-correctness-around-typeextractor) rules out as a foundation. Depending on how the lambda compiles, Flink either can't determine the type at all or treats `User` as a generic type and serializes it with Kryo. `User` has no no-argument constructor, so it isn't a Flink POJO. Setting Flink's `pipeline.generic-types` to `false` turns that fallback into an error when the job graph is built. Flinkt doesn't set it, because entering the façade changes nothing Flink sees.
+```kotlin
+fun <R> enrich(
+    events: FlinktDataStream<Event>,
+    fn: MapFunction<Event, R>,
+    type: TypeInformation<R>,
+) = events.map(fn, type)
+```
 
-Exits are part of the API and are tested like the rest of it. [Compile contracts](docs/testing.md#where-the-façade-ends) pin each exit's return type. A per-adapter inventory fails when a Flink line adds a stream-returning method that the façade neither overrides nor lists as an exit.
+Nullability comes through the same way. A lambda that returns `User?` produces a stream of `User?`, which Flinkt models differently from `User`. A function written in Java has no nullability information, so Flinkt treats its result as non-null. When a Java function can return null, state the type: `map<User?>(javaFunction)`.
 
-One case is still open. Flink operators that take a function object and produce a new element type, such as `process(SessionFunction())` in the first example on this page, aren't forced exits, because the façade can override them. An override can't have a reified type parameter, though, so `typeInfo<R>()` can't supply their result type. [#3](https://github.com/Lychee-Technology/flinkt/issues/3) tracks whether they stay in the façade and where their result type comes from.
+### Leaving the view
+
+Only the methods a view offers are Flinkt's. For anything else, such as `connect`, windows, joins, sinks, or a library that takes a `DataStream`, call `asFlink()`. From that point on, Flink's rules apply, including its own type inference. Pass `typeInfo<R>()` wherever Flink accepts a `TypeInformation`, and re-enter with `.flinkt()`:
+
+```kotlin
+val counts =
+    users                               // FlinktKeyedStream<User, Long>
+        .asFlink()
+        .window(windowAssigner)
+        .aggregate(CountVisits(), typeInfo<VisitCount>(), typeInfo<UserVisits>())
+        .flinkt()
+        .name("visits")
+```
+
+A method a view doesn't offer is a compile error, never a silent switch to Flink's method. Views cover more of Flink's API over time, and each one is reachable through `asFlink()` until then.
+
+Code outside the view can still produce a Kryo type. Setting Flink's `pipeline.generic-types` to `false` makes Flink reject generic types when it builds the job. Flinkt recommends that setting but doesn't set it itself, because using Flinkt changes nothing Flink sees.
+
+### When something isn't supported
+
+Flinkt fails at the earliest point that can see the problem:
+
+| Situation | Fails | Result |
+|---|---|---|
+| A `@FlinkType` declaration uses a type Flinkt can't model | at compile time (KSP) | an error naming the field and the type |
+| An operator's result type isn't modeled | when the job graph is built (`typeInfo<R>()`) | an error naming the full Kotlin type and the two fixes: annotate it with `@FlinkType`, or pass a `TypeInformation` explicitly |
+| An operator's result type isn't known at the call site | at compile time | use the overload that takes a `TypeInformation` |
+| The view doesn't offer a Flink method | at compile time | call it on `asFlink()` |
+| The Flinkt adapter doesn't match the Flink runtime | on first use of the adapter | a message naming the adapter for the running Flink line |
+
+Flinkt vouches for the types it produces. It doesn't inspect a stream's type on entry, because reading the type makes Flink refuse a later `returns()` on the original stream.
 
 ---
 
@@ -322,6 +252,8 @@ TypeInformation<T>
     ▼
 TypeSerializer<T>
 ```
+
+`typeInfo<T>()` reads the Kotlin type with `typeOf<T>()`, which carries generic arguments and nullability and doesn't need `kotlin-reflect`.
 
 `TypeInformation` and `TypeSerializer` remain separate layers.
 
@@ -406,7 +338,7 @@ override fun serialize(
 
 and construct the result directly during deserialization.
 
-Shared Flink protocol behavior should remain centralized where possible. Generating an entirely independent `TypeInformation`, comparator, and snapshot implementation for every Kotlin class would create more persisted and version-sensitive surface area than is necessary to remove reflection.
+Shared Flink protocol behavior stays centralized. Generating an entirely independent `TypeInformation`, comparator, and snapshot implementation for every Kotlin class would create more persisted and version-sensitive surface area than is necessary to remove reflection. [Generated code and the adapter](docs/architecture.md#generated-code-and-the-adapter) describes the split.
 
 ---
 
@@ -554,23 +486,25 @@ ValueStateDescriptor(
 )
 ```
 
-Flinkt can preserve the complete type:
+Flinkt preserves the complete type. There are two helper families, named after the Flink type each one returns.
+
+Descriptor helpers build an ordinary Flink descriptor, for example to configure TTL or to pass to a Flink API that takes one:
 
 ```kotlin
-runtimeContext.valueState<List<User>>("users")
+valueStateDescriptor<List<User>>("users")      // ValueStateDescriptor<List<User>>
+listStateDescriptor<Event>("events")           // ListStateDescriptor<Event>
+mapStateDescriptor<UserId, User>("users")      // MapStateDescriptor<UserId, User>
 ```
 
-Likewise:
+Binding helpers call Flink's `getState`, `getListState`, or `getMapState` with such a descriptor, and return Flink's state handle:
 
 ```kotlin
-runtimeContext.listState<Event>("events")
-
-runtimeContext.mapState<UserId, User>("users")
+runtimeContext.valueState<User>("user")        // ValueState<User>
+runtimeContext.listState<Event>("events")      // ListState<Event>
+runtimeContext.mapState<UserId, User>("users") // MapState<UserId, User>
 ```
 
-The resulting descriptors remain normal Flink state descriptors.
-
-State lifecycle is intentionally not hidden. Initialization still happens where Flink makes runtime state available:
+State lifecycle is intentionally not hidden. Binding happens where Flink makes runtime state available, and the type arguments come from the property:
 
 ```kotlin
 class UserFunction :
@@ -602,7 +536,7 @@ A property-delegate DSL could make this shorter, but it would also make the runt
 
 Generated types need to work across module boundaries without scanning the entire classpath.
 
-A module can expose its generated types through a Flinkt-owned SPI:
+A module exposes its generated types through a Flinkt-owned SPI:
 
 ```kotlin
 interface GeneratedTypeModule {
@@ -613,7 +547,7 @@ interface GeneratedTypeModule {
 }
 ```
 
-Per-type generated code remains associated with its source declaration, while a module-level registry aggregates the types produced by that compilation.
+KSP generates one implementation per compilation and registers it in `META-INF/services`, where `java.util.ServiceLoader` finds it. Per-type generated code remains associated with its source declaration, while the module-level registry aggregates the types produced by that compilation.
 
 A consuming module should reuse generated metadata from a dependency rather than regenerate serializers for classes it does not own.
 
@@ -697,45 +631,35 @@ The Table layer should not treat `DataType` as another spelling of `TypeInformat
 
 ## Project boundaries
 
-The architecture separates compile-time analysis, runtime type support, and user-facing DataStream integration.
-
-Conceptually:
+The architecture separates compile-time analysis, runtime type support, and user-facing Flink integration:
 
 ```text
 @FlinkType source
        │
        ▼
-      KSP
+      KSP                          build time only
        │
        ├── schema metadata
-       ├── generated adapter
-       ├── generated serializer
+       ├── generated codec         no Flink types
        └── module registry
        │
        ▼
-Flinkt type runtime
-       │
-       ├── typeInfo<T>()
-       ├── TypeInformation
-       ├── serializer snapshots
-       └── generated registry
+flinkt-core                        type model, codec SPI; no Flink dependency
        │
        ▼
-DataStream façade / state / Table integration
-       │
+Flink adapter (one per line)       views, typeInfo<T>(), TypeInformation,
+       │                           serializer snapshots, state helpers
        ▼
 Apache Flink
 ```
 
-The layers are separate because KSP compatibility, public Kotlin APIs, and persisted Flink serializer formats evolve on different timescales.
-
-A change to generated source code can be cheap to replace. A change to a serializer format after users have produced checkpoints may not be.
+The layers are separate because KSP compatibility, public Kotlin APIs, and persisted Flink serializer formats evolve on different timescales. A change to generated source code can be cheap to replace. A change to a serializer format after users have produced checkpoints may not be. [Architecture](docs/architecture.md#layers-and-modules) lists the modules, and [Flink version compatibility](docs/flink-compatibility.md) covers the adapters.
 
 ---
 
 ## Why no compiler plugin?
 
-A Kotlin compiler plugin could make a raw Flink `DataStream<T>` transparently receive explicit Kotlin-aware type information:
+A Kotlin compiler plugin could give a raw Flink `DataStream<T>` Kotlin-aware type information:
 
 ```kotlin
 stream.map {
@@ -743,13 +667,13 @@ stream.map {
 }
 ```
 
-without a façade.
+without a view.
 
 That provides an attractive source experience, but it also couples the project to Kotlin compiler internals and compiler-version compatibility.
 
-The subtype façade reaches most of the same user-facing syntax using ordinary Kotlin/JVM mechanisms.
+The view reaches the same source with ordinary Kotlin: `.flinkt()` where a stream enters, and `asFlink()` where it leaves.
 
-A compiler plugin may become an optional layer later. It is not a foundation of the initial architecture.
+A compiler plugin may become an optional layer later, for example to flag raw Flink calls that produce types Flinkt models. It is not a foundation of the initial architecture.
 
 ---
 
@@ -770,6 +694,7 @@ and:
 ```kotlin
 val users =
     events
+        .flinkt()
         .map {
             User(
                 id = it.id,
@@ -778,25 +703,28 @@ val users =
         }
         .name("users")
         .keyBy { it.id }
+        .process(UserFunction())
 ```
 
-with state:
+with state bound in `UserFunction.open()`:
 
 ```kotlin
-runtimeContext.valueState<User>("user")
+user = runtimeContext.valueState<User>("user")
 ```
+
+The slice is built against Flink 2.3 first. From the first slice on, its adapter source also compiles against Flink 1.20, where the Flink type protocol differs the most ([CI tiers](docs/testing.md#pull-requests)).
 
 That vertical slice should establish the contracts that later features depend on:
 
-- Kotlin operator overloads provide explicit Flink type information;
-- fluent Flink calls preserve the façade;
-- entering the façade, and wrapping the streams Flink returns, leave the stream graph unchanged and drop none of the state Flink keeps on stream objects;
+- view operators give Flink explicit type information derived from the call site;
+- fluent Flink calls return the view;
+- entering a view adds nothing to the job, and the view makes the same Flink calls as direct Flink code;
+- `asFlink()` returns the original Flink object;
 - generated record serialization does not use Kotlin reflection;
 - generated types do not silently become generic/Kryo types;
-- normal Flink APIs can consume Flinkt stream subtypes;
 - serializer snapshots can restore state correctly.
 
-Nullable fields, collections, value classes, generic classes, sealed hierarchies, and schema migration should build on those contracts rather than bypass them.
+Nullable fields, collections, value classes, generic classes, sealed hierarchies, schema migration, and views over more of Flink's API should build on those contracts rather than bypass them.
 
 ---
 
@@ -804,17 +732,15 @@ Nullable fields, collections, value classes, generic classes, sealed hierarchies
 
 Review should focus on the boundaries where Kotlin convenience can accidentally change Flink behavior.
 
-**API resolution:** Does `stream.map { ... }` select the intended Kotlin overload? Can the underlying Flink overload still be used deliberately?
+**API resolution:** Does `stream.map { ... }`, or `stream.map(fn)`, select the view's overload, with the result type taken from the call site?
 
-**Façade preservation:** Do `name`, `uid`, `setParallelism`, and related calls keep the stream in the Flinkt type hierarchy? Where a call leaves it, is the call a listed exit?
+**View discipline:** Does each view method make exactly one call on the Flink object the view holds, and wrap what Flink returned? Does any Flinkt code construct a Flink stream object, or read a stream's type on entry?
 
-**Adaptation:** Does entering the façade, or wrapping a stream Flink returned, keep the same transformation and all the state Flink holds on the original object? Where it can't, does it fail explicitly, and at compile time when the static type already shows it?
-
-**Type propagation:** Whenever an operator introduces a new generic type, does Flink receive the complete `TypeInformation`, including nested generic arguments and nullability where relevant?
+**Type propagation:** Whenever an operator introduces a new generic type, does Flink receive the complete `TypeInformation`, including nested generic arguments and nullability where relevant? Does the adapter reach it through a public Flink method?
 
 **Hot path:** Can serialization, deserialization, copying, field access, or comparison reach Kotlin reflection indirectly?
 
-**Interoperability:** Can Flinkt streams be used directly wherever ordinary Flink `DataStream` and `KeyedStream` values are expected?
+**Interoperability:** Does `asFlink()` return the original object, so every Flink API still accepts it?
 
 **State compatibility:** Does every compatibility result correspond to bytes that the new serializer can actually consume? This deserves more scrutiny than ordinary API code because persisted state outlives a process and often outlives a library release.
 

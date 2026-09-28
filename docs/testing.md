@@ -31,13 +31,13 @@ The test strategy therefore treats compile-time behavior, serializer behavior, F
 
 Tests should protect a small set of invariants rather than mirror implementation structure. Flinkt is correct only if:
 
-1. Kotlin calls resolve to the intended Flinkt API.
+1. Kotlin calls on a view resolve to the intended Flinkt overload, and each result type comes from the call site.
 2. Complete Kotlin type information reaches Flink where required.
 3. Supported types do not silently fall back to generic or Kryo serialization.
 4. Generated per-record code does not depend on Kotlin reflection.
 5. Flinkt serializers satisfy Flink's serializer contracts.
 6. Serializer snapshot compatibility results agree with real serialized bytes.
-7. Flinkt's façade remains usable, and builds the same job as the Flink calls it stands for, on every supported Flink adapter.
+7. On every supported Flink adapter, the views make the same Flink calls as the code they stand for, and entering or leaving a view changes nothing Flink sees.
 8. Persisted state can be restored across every upgrade path Flinkt claims to support.
 9. Flinkt's public Kotlin API does not change accidentally.
 
@@ -158,33 +158,57 @@ stream.filter { ... }
 stream.keyBy { ... }
 ```
 
-That makes Kotlin overload resolution part of the public contract, so tests must compile representative user code and assert its static types. Conceptually:
+That makes Kotlin overload resolution part of the public contract. Tests must compile representative user code and assert the exact static type of each result. Runtime tests can't reliably catch this class of regression after the fact.
+
+### Asserting an exact static type
+
+A supertype assertion such as `expectType<DataStream<Event>>(x)` also accepts any subtype, so it can't show that `x` has exactly that type. Comparing `typeOf` of the inferred type with an expected `KType` doesn't work either: when a lambda converts to a Java function interface, Kotlin infers a flexible type such as `User!`, and its `KType` differs from `User`'s. Compile contracts use an invariant carrier, inferred from the value alone before any expected type applies:
 
 ```kotlin
-val mapped =
+class Exactly<T>
+
+fun <T> exactTypeOf(value: T): Exactly<T> = Exactly()
+
+fun <U> Exactly<U>.shouldBe() = Unit
+```
+
+```kotlin
+val users =
     stream.map {
         User(it.id, it.name)
     }
 
-expectType<FlinktSingleOutputStreamOperator<User>>(mapped)
+exactTypeOf(users).shouldBe<FlinktSingleOutputStreamOperator<User>>()
+exactTypeOf(users.keyBy { it.id }).shouldBe<FlinktKeyedStream<User, Long>>()
+exactTypeOf(users.asFlink()).shouldBe<SingleOutputStreamOperator<User>>()
 ```
 
-and:
+`exactTypeOf(x)` infers `Exactly<X>` from `x` alone, and `Exactly` is invariant, so `shouldBe<Y>()` compiles only when `X` is `Y`. A flexible `User!` still matches `User`. A subtype doesn't match: `exactTypeOf(subtypeValue).shouldBe<DataStream<String>>()` fails with a receiver type mismatch. That was checked against Kotlin 2.4.20.
 
-```kotlin
-val keyed =
-    mapped.keyBy {
-        it.id
-    }
+### Operators take their result type from the call site
 
-expectType<FlinktKeyedStream<User, Long>>(keyed)
+Each operator that introduces an element type must be covered in every form a user can call it:
+
+```text
+lambda                              map { User(...) }
+Flink function literal              map(MapFunction<Event, User> { ... })
+Kotlin function class               map(ToUser())
+Java function class                 map(JavaToUser())
+generic function class              process(Passthrough())
+Kotlin nullable result              map { it.takeIf { ... } }       → R is nullable
+explicit type argument              map<User?>(javaFunction)
 ```
 
-These tests should fail at compilation time when an overload becomes ambiguous or when Kotlin unexpectedly selects a Flink Java overload. Runtime tests cannot reliably detect this class of regression after the fact.
+Each case asserts the exact static type here, and the [type-information contracts](#typeinformation-contracts) check what Flink receives.
 
-### Preserve the façade through fluent calls
+Two more tests complete this section:
 
-The subtype façade is only useful while it survives normal Flink configuration. This chain must not silently become a plain Flink stream halfway through:
+- An operator called inside generic code where `R` isn't reified must not compile. The diagnostic is Kotlin's *cannot use 'R' as reified type parameter*, and the overload that takes a `TypeInformation` must compile in the same position.
+- A structural test reads the public API of the view classes and fails when a method that introduces a type parameter in its result is neither `inline` with that parameter reified nor given a `TypeInformation` for it.
+
+### Preserve the view through fluent calls
+
+This chain must stay in the view:
 
 ```kotlin
 stream
@@ -195,43 +219,34 @@ stream
     .filter { it.valid }
 ```
 
-Compile contracts should verify the return type after relevant fluent methods. This suite must run against every supported Flink minor adapter because method signatures and return types are a direct Flink-version dependency.
+Compile contracts check the exact type after each fluent method. They run against every supported Flink adapter, because the views are compiled per line.
 
-### Where the façade ends
+### Leaving the view is explicit
 
-Some calls [leave the façade](../README.md#where-the-façade-ends), such as `union`, which Flink declares `final`. Each exit gets a compile contract that pins the exact static type Flink returns, and shows that the result re-enters:
+A view must never be a Flink stream. Otherwise inherited Flink methods would be callable on it, and a call could leave Flinkt without anything in the source showing it. Two tests protect this:
 
-```kotlin
-val merged = events.union(replayedEvents)
-expectType<DataStream<Event>>(merged)   // exact type: Flink's, not the façade's
+- A structural test fails if a view class extends or implements a Flink type.
+- A negative compile test: `val d: DataStream<Event> = view` must not compile, and neither must a Flink method the view doesn't offer, such as `view.connect(other)`.
 
-val users = merged.flinkt().map { User(it.id, it.name) }
-expectType<FlinktSingleOutputStreamOperator<User>>(users)
-```
+`.flinkt()` has a compile contract for each Flink type that can enter: `DataStream`, `SingleOutputStreamOperator` (including a `DataStreamSource`), and `KeyedStream`. Each one asserts the view type and asserts that `asFlink()` has the exact Flink type.
 
-The first assertion checks the exact type, because a `FlinktDataStream<Event>` would also pass as a `DataStream<Event>`. If a later change lets `union` keep the façade, the test fails, and the list of exits changes with it.
+### State helpers
 
-Compile contracts cover only the calls someone wrote a test for, and a new Flink minor line can add methods. Each adapter therefore also runs an inventory of the public methods on Flink's `DataStream`, `SingleOutputStreamOperator`, and `KeyedStream` that return a stream or an intermediate stream type such as `ConnectedStreams`. Sinks end a chain, so they're excluded. Every listed method must either be overridden by the façade with a façade return type or be on that line's [exit list](flink-compatibility.md#façade-exits). A method that is neither fails the test, so an upgrade can't add an exit silently. The inventory belongs to the façade retention tests and runs wherever they run.
-
-### Adapting existing streams
-
-[Adapting Flink stream objects](../README.md#adapting-flink-stream-objects) promises two things that must fail at compile time, so both need negative compile tests:
+Descriptor helpers and binding helpers return different Flink types, and the tests pin both:
 
 ```kotlin
-val parsed: SingleOutputStreamOperator<Event> = ...
-parsed.flinkt().setParallelism(4)   // must not compile
-
-val keyed: KeyedStream<Event, Long> = ...
-keyed.flinkt()                      // must not compile
+exactTypeOf(valueStateDescriptor<User>("user")).shouldBe<ValueStateDescriptor<User>>()
+exactTypeOf(runtimeContext.valueState<User>("user")).shouldBe<ValueState<User>>()
 ```
 
-The adapted operator needs a separate case for each of `name`, `uid`, `setParallelism`, and `getSideOutput`, because the README says the adapted value offers none of them.
-
-The runtime check can't stand in for the keyed case. `KeyedStream<T, K>` extends `DataStream<T>`, so a `DataStream<T>.flinkt()` extension also accepts a keyed receiver. An adapter that has only the runtime check would pass every [adapter contract](#flink-adapter-contract) test and still let `keyed.flinkt()` compile. As with the [processor's negative cases](#compile-failures-are-part-of-the-api), the test checks the diagnostic as well as the failure. The diagnostic must name `KeyedStream` and point to the alternatives: the façade's own `keyBy`, or Flink's methods with an explicit `typeInfo<R>()`.
+The same applies to `list` and `map`. A negative compile test assigns `runtimeContext.valueState<User>("user")` to a `ValueStateDescriptor<User>`. A positive one compiles the README's `open()` example, where the type arguments come from the property type.
 
 ### Preserve access to native Flink APIs
 
-Improving Kotlin ergonomics must not make established Flink APIs inaccessible. A Flinkt stream should remain directly assignable where Flink expects `DataStream<T>` or the corresponding keyed or operator type. Tests should also cover users who deliberately choose Flink APIs such as `MapFunction`, `KeySelector`, and `ProcessFunction`.
+Improving Kotlin ergonomics must not make established Flink APIs inaccessible:
+
+- `asFlink()` must return the instance that entered, and tests assert identity.
+- View operators must accept Flink's own function types, including `MapFunction`, `KeySelector`, `ProcessFunction`, `KeyedProcessFunction`, and their rich variants.
 
 ## TypeInformation contracts
 
@@ -246,6 +261,8 @@ typeInfo<Map<Long, User>>()
 typeInfo<User?>()
 typeInfo<Envelope<User>>()
 ```
+
+`typeInfo<String?>()` and `typeInfo<String>()` must differ, and so must the output types of `map { it.takeIf { ... } }` and `map { it }`. A platform type from Java code resolves as non-null, and a test pins that rule. A type Flinkt can't model must fail with an error that names the full Kotlin type, including its arguments and nullability.
 
 Tests should inspect the semantics that matter to Flink:
 
@@ -397,21 +414,41 @@ tests should include equal and differing values at each key position. Comparator
 
 ## Flink adapter contract
 
-Compile contracts show which static type a call returns. They can't show that the returned object behaves like the Flink object it stands for. Entering the façade builds new objects over Flink's transformations, and Flink keeps some configuration on the stream objects themselves ([State on stream objects](flink-compatibility.md#state-on-stream-objects)). A façade can therefore pass every compile contract and still change the job. These tests run against each adapter's real Flink classes. They only need to build the stream graph, not run it, so no MiniCluster is required.
+Compile contracts show which static type a call returns. They can't show that the Flink calls behind it are the ones the user's code stands for. These tests run against each adapter's real Flink classes. They only need to build the stream graph, not run it, so no MiniCluster is required.
 
-**Same graph as plain Flink.** Build a pipeline once through the façade and once with the Flink calls it stands for. Pass the plain calls, explicitly, the `TypeInformation` the façade should produce, so that Flink's own type inference plays no part. The generated stream graphs must match in nodes, edges, partitioners, output types, parallelism, max parallelism, UIDs, and names. A façade operator that let Flink infer its type therefore fails the comparison. Compare structure, not generated IDs, since those come from a global counter. Cover entry through `env.flinkt()` and `stream.flinkt()`, re-entry after `union`, the first-milestone chain, and a keyed pipeline.
+**Same graph as plain Flink.** Build a pipeline once through the views and once with the equivalent Flink calls. Pass the Flink calls, explicitly, the `TypeInformation` the view should produce, so that Flink's own type inference plays no part. The two stream graphs must match in:
 
-**Flink still acts on per-object state.** Every field listed for the adapter's line needs a case showing that Flink still acts on it through the façade. For example:
+- nodes and edges;
+- partitioners;
+- operator classes;
+- output types;
+- parallelism and max parallelism;
+- UIDs and names.
+
+A view operator that let Flink infer its type fails the comparison, and so does one that reached a different Flink method. Compare structure, not generated IDs, since those come from a global counter. Cover at least:
+
+- the first-milestone chain;
+- `process` on a keyed stream;
+- `union`;
+- a side output;
+- `DataStreamUtils.reinterpretAsKeyedStream`, whose forward partitioning an extra keyed step would replace.
+
+**Entering and leaving change nothing.** For each type that can enter, `x.flinkt().asFlink()` must be `x`, and the environment's transformations must be the same before and after entering.
+
+**Flink still acts on per-object state.** Every field listed in [State on stream objects](flink-compatibility.md#state-on-stream-objects) for the adapter's line gets a case showing that a call through the view gives the same outcome as the call on the Flink object:
 
 ```text
-façade operator, forceNonParallel(), setParallelism(2)   → rejected, as in Flink
-façade operator, one side-output ID with two types       → rejected, as in Flink
-façade keyBy, enableAsyncState(), then façade process    → async state enabled on the operator
+forceNonParallel(), then setParallelism(2) through the view       → rejected, as in Flink
+side-output ID requested through the view, then with another type → rejected, as in Flink
+non-parallel source, setParallelism(2) through the view           → rejected, as in Flink
+2.x: enableAsyncState(), then process through the view            → asynchronous keyed operator, as in Flink
 ```
 
-**Adaptation fails explicitly.** `.flinkt()` must reject a `KeyedStream` typed as `DataStream<T>`, and any `DataStream` subclass the adapter doesn't recognize. The error names the class, and the environment's transformations are unchanged afterwards. When the static type shows a `KeyedStream`, the call must fail at compile time instead. That is a [compile contract](#adapting-existing-streams), and passing this runtime check doesn't satisfy it.
+Views never copy these fields, so the cases pass by construction. They stay as regression tests against adapter code that builds its own Flink objects.
 
-These tests run on every adapter lane, because the fields differ between Flink lines.
+**No `@Internal` Flink methods.** A test lists every Flink method the adapter calls and fails if one is annotated `@Internal` on the adapter's line. It reads the annotations by reflection on 2.x and from bytecode on 1.20, where they have class retention. An `@Experimental` method must match a documented exception in the [dependency policy](flink-compatibility.md#dependency-policy-for-flink-apis).
+
+These tests run on every adapter lane, because the Flink classes differ between lines.
 
 ## Flink runtime integration
 
@@ -433,7 +470,7 @@ process
 sink
 ```
 
-The test should verify both results and relevant type/runtime properties. This layer should stay focused. It should not reproduce the entire type matrix already covered by lower-level tests.
+The pipeline runs with Flink's `pipeline.generic-types` set to `false`, so any Kryo fallback anywhere in it fails the job. The test should verify both results and relevant type/runtime properties. This layer should stay focused. It should not reproduce the entire type matrix already covered by lower-level tests.
 
 ## State integration
 
@@ -573,7 +610,6 @@ Each adapter lane should run at least:
 
 ```text
 Kotlin API compile contracts
-façade retention tests
 Flink adapter contract tests
 type-information contracts
 serializer contracts
@@ -604,7 +640,7 @@ Flinkt itself is a Kotlin library and needs an ABI contract independent of Flink
 inline functions
 reified generics
 default parameters
-subtype façade methods
+view methods
 extension functions
 ```
 
@@ -621,7 +657,7 @@ keyBy with value class
 explicit Flink MapFunction
 generic state
 fluent operator chain
-native Flink interop
+entering a view and leaving it with asFlink()
 ```
 
 These fixtures catch problems that binary API comparison may not detect, such as:
@@ -739,17 +775,18 @@ unit tests
 KSP compilation tests
 negative compilation tests
 API resolution tests
-façade retention tests
-Flink adapter contract tests (primary adapter)
+Flink adapter contract tests
 type-information contracts
 serializer contracts
 snapshot compatibility logic
 ABI validation
 incremental KSP smoke test
-primary Flink adapter MiniCluster smoke test
+MiniCluster smoke test
 ```
 
-Which adapter is primary hasn't been decided yet ([#2](https://github.com/Lychee-Technology/flinkt/issues/2)).
+These run on the **primary adapter**, which is the adapter for the newest Flink minor line the community supports. Today that's 2.3. The rule names a line rather than a fixed version, so this document doesn't change each time Flink releases a minor version. The first slice is built on that adapter.
+
+PR CI also compiles the shared adapter source against Flink 1.20 and runs its compile contracts and adapter contract tests there, without a MiniCluster. 1.20 is where Flink's type protocol differs most from 2.x ([Differences between target lines](flink-compatibility.md#differences-between-target-lines)), and catching a 1.x/2.x difference on the PR that introduces it costs a compile and a graph build. Other lines join merge and nightly CI once their adapters exist.
 
 A PR should not need to restore every historical savepoint.
 
@@ -839,7 +876,7 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 **Compile tests:** Does the test prove which Kotlin overload is selected, or merely that some overload compiles? Where the design promises a compile error, does a negative compile test check it, or only a runtime rejection?
 
-**Façade behavior:** Would the test fail if entering the façade added a transformation or dropped state that Flink keeps on the stream object? Would it fail if a call left the façade without being a listed exit?
+**View behavior:** Would the test fail if a view method made a different Flink call than the code it stands for, or if entering a view built or changed a Flink object? Does an exact-type assertion actually reject a subtype?
 
 **Type fallback:** Would the test fail if a generated type silently became generic/Kryo-serialized?
 
@@ -862,9 +899,9 @@ This section is the only definition of when a Flink line may be marked **Support
 A Flinkt release should not describe a combination as supported solely because it compiles. A Flink line becomes **Supported target** only when the [release-tier suite](#release) passes with that line's adapter included, and the results show that, on that adapter:
 
 ```text
-the Kotlin API resolves correctly
-the façade survives normal Flink chaining
-the façade builds the same stream graph, and Flink still acts on per-object state
+the Kotlin API resolves correctly, with result types from the call site
+the views survive normal Flink chaining
+the views build the same stream graph as direct Flink calls, and Flink still acts on per-object state
 supported types preserve their intended type information
 generated serializers satisfy their contracts
 no documented specialized type silently falls back to generic serialization
