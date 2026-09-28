@@ -156,15 +156,15 @@ The annotations, the Kotlin schema, the KSP model, and the application API shoul
 
 Flinkt's views hold Flink stream objects rather than extend Flink classes ([decision](architecture.md#decision-streams-are-views-not-flink-subtypes)). Each view method calls one Flink method on the object it holds, so a view depends only on the Flink methods it calls:
 
-- **Flink adds a method.** Existing view calls don't change. Users reach the new method through `asFlink()` until a view offers it.
-- **Flink removes or changes a method a view calls.** The adapter stops compiling for that line, which is caught before release and doesn't reach a user's job.
+- **Flink adds a method.** Existing view calls don't change. Users reach the new method through `asFlink()` until a view offers it. If Flink adds an overload to a method a view [forwards](architecture.md#generated-forwarders), the generator forwards it as well. The adapter's checked-in API dump shows that change in review.
+- **Flink removes or changes a method a view calls or forwards.** Generation or compilation of the adapter fails for that line, which is caught before release and doesn't reach a user's job. That includes a forwarded method becoming `@Internal` or `@Experimental`.
 - **Flink moves state between a stream object and its transformation.** Views don't copy either, so nothing needs updating. The adapter contract tests still check the known cases per line.
 
 The adapters for all target lines are compiled from one shared source set. A per-line source set holds only what differs between lines.
 
 ### Differences between target lines
 
-Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/40cd1b72e0dd571e242e4d054021ced85e0ed248/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
+Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/dd2d0f18f6d683107c5ff289c2e6d8bf93d17029/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
 
 | Area | 1.20 | 2.2, 2.3 | Effect on the adapter |
 |---|---|---|---|
@@ -386,7 +386,7 @@ pass the release-tier suite on the 2.4 lane
 mark 2.4.x Supported target in the matrix
 ```
 
-The process should not assume compatibility merely because existing code compiles. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/40cd1b72e0dd571e242e4d054021ced85e0ed248/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
+The process should not assume compatibility merely because existing code compiles. Building the adapter regenerates the view forwarders from the new line's classes, and the diff of the adapter's API dump shows what that changed. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/dd2d0f18f6d683107c5ff289c2e6d8bf93d17029/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
 
 ```text
 Flink methods the views call: existence, signature, stability annotation

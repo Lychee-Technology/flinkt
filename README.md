@@ -26,10 +26,10 @@ val sessions =
         .keyBy { it.userId }
         .process(SessionFunction())
 
-sessions.asFlink().sinkTo(sink)
+sessions.sinkTo(sink)
 ```
 
-`.flinkt()` gives Kotlin a view of the Flink stream, and `.asFlink()` hands back the Flink object. Between the two, every operator that produces a new element type passes Flink the complete Kotlin type.
+`.flinkt()` gives Kotlin a view of the Flink stream. From there on, every operator that produces a new element type passes Flink the complete Kotlin type. `.asFlink()` hands back the Flink object when a Flink API needs it.
 
 ## Why
 
@@ -145,7 +145,7 @@ An earlier version of this design made each Flinkt stream a subclass of the Flin
 
 Each view method makes one call to the Flink method of the same name on the object it holds, and wraps the object Flink returns. Flink's own checks apply. After `op.forceNonParallel()`, `op.flinkt().setParallelism(2)` fails exactly as `op.setParallelism(2)` does.
 
-Fluent configuration returns the view, so a chain stays in Flinkt:
+Fluent configuration returns the view, so a chain stays in Flinkt. The same holds for the other Flink methods that keep the element type, such as `filter`, `union` and repartitioning, and for terminal calls such as `sinkTo`, `print` and `executeAndCollect`:
 
 ```kotlin
 stream
@@ -155,6 +155,8 @@ stream
     .setParallelism(8)
     .filter { it.valid }
 ```
+
+These forwarding methods are generated from Flink's own classes when Flinkt is built for each Flink line. The generator refuses any method that would break the rules on this page ([Generated forwarders](docs/architecture.md#generated-forwarders)).
 
 ### Where result types come from
 
@@ -181,7 +183,7 @@ Nullability comes through the same way. A lambda that returns `User?` produces a
 
 ### Leaving the view
 
-Only the methods a view offers are Flinkt's. For anything else, such as `connect`, windows, joins, sinks, or a library that takes a `DataStream`, call `asFlink()`. From that point on, Flink's rules apply, including its own type inference. Pass `typeInfo<R>()` wherever Flink accepts a `TypeInformation`, and re-enter with `.flinkt()`:
+Only the methods a view offers are Flinkt's. For anything else, such as `connect`, windows, joins, broadcast state, or a library that takes a `DataStream`, call `asFlink()`. From that point on, Flink's rules apply, including its own type inference. Pass `typeInfo<R>()` wherever Flink accepts a `TypeInformation`, and re-enter with `.flinkt()`:
 
 ```kotlin
 val counts =
@@ -717,7 +719,7 @@ The slice is built against Flink 2.3 first. From the first slice on, its adapter
 That vertical slice should establish the contracts that later features depend on:
 
 - view operators give Flink explicit type information derived from the call site;
-- fluent Flink calls return the view;
+- fluent Flink calls return the view, and every forwarding method is generated from the adapter line's Flink classes;
 - entering a view adds nothing to the job, and the view makes the same Flink calls as direct Flink code;
 - `asFlink()` returns the original Flink object;
 - generated record serialization does not use Kotlin reflection;
