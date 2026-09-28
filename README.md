@@ -200,7 +200,40 @@ An existing Flink stream can also be adapted explicitly:
 val users = existingStream.flinkt()
 ```
 
-The conversion changes the Kotlin-facing API type. It should not copy records or create an unrelated execution graph.
+Entering changes the Kotlin-facing API type and nothing Flink sees. It copies no records, adds no transformation, and keeps every check Flink would have applied to the original object.
+
+For `env.flinkt()`, that means the result keeps working through the original environment. A `StreamExecutionEnvironment` holds the job's configuration and the list of transformations it will execute, so a second environment object would split the job in two.
+
+### Adapting Flink stream objects
+
+Sharing a stream's `Transformation` is not enough to make a new object behave like the original. Flink keeps some configuration on the stream object itself:
+
+```text
+SingleOutputStreamOperator   forceNonParallel() flag, side outputs already requested
+KeyedStream                  key selector, key type, enableAsyncState() flag (2.x)
+DataStreamSource             whether the source may run in parallel
+```
+
+Flink reads these fields when it validates configuration or builds later operators. After `op.forceNonParallel()`, `op.setParallelism(2)` fails. A second object built over `op`'s transformation starts with the flag cleared and would accept it. The public API exposes the key selector and key type but none of the other fields, and two objects can't share them. [State on stream objects](docs/flink-compatibility.md#state-on-stream-objects) records the fields for each target Flink line.
+
+A keyed stream's partitioning can't be shared either. `KeyedStream`'s public constructors always add a new `PartitionTransformation`, and only a package-private `@Internal` constructor accepts an existing one. A rebuilt copy isn't always equivalent: `DataStreamUtils.reinterpretAsKeyedStream` keys a stream through a forward partitioner, and rebuilding that stream through the public constructor hash-partitions it again, adding the shuffle the user avoided on purpose.
+
+Adaptation therefore follows the same rule as unsupported types. When the adapter can't reproduce a stream exactly, it fails with an explicit error instead of returning an approximation:
+
+- **Non-keyed streams**, including an existing `SingleOutputStreamOperator`, adapt to a `FlinktDataStream<T>` over the same environment and transformation. Those are all that a downstream operator reads, so operators added after adaptation are the ones Flink would have added. The adapted value doesn't offer `name`, `uid`, `setParallelism`, or `getSideOutput`. The operator itself stays configured through the original reference, where Flink's checks live.
+- **Keyed streams** are rejected, at compile time where the static type shows it. Streams keyed through the façade's own `keyBy` never need adapting. On a `KeyedStream` from elsewhere, Flink's own methods still work with an explicit `typeInfo<R>()`, and their results can enter the façade. Adapting the keyed stream itself would mean reaching Flink's package-private `@Internal` constructor, which the [dependency policy](docs/flink-compatibility.md#internal) discourages, and nothing needs that yet.
+- **The runtime class decides**, not the static type. A `KeyedStream` passed around as `DataStream<T>` is still rejected. Keyed operators take their key from the `KeyedStream` object, so an unkeyed view would silently lose keyed state. A class the adapter doesn't recognize is rejected too, rather than treated as its nearest known superclass.
+
+```kotlin
+val users =
+    parsed                // SingleOutputStreamOperator<Event>
+        .uid("parse-v1")
+        .setParallelism(4)
+        .flinkt()         // FlinktDataStream<Event>
+        .map { toUser(it) }
+```
+
+The façade's own operators wrap Flink objects too. The façade's `map` calls Flink's `map` and wraps the returned operator in a `FlinktSingleOutputStreamOperator`. Nothing else holds Flink's object, so no second reference can disagree, but the wrapper must start with the state Flink left on it. For example, Flink returns `windowAll` results already forced non-parallel. The façade's `keyBy` doesn't wrap anything. It builds its `FlinktKeyedStream` with the same public constructor that Flink's own `keyBy` uses, so it adds exactly one partitioning step.
 
 ### Preserve fluent chains
 
@@ -730,6 +763,7 @@ That vertical slice should establish the contracts that later features depend on
 
 - Kotlin operator overloads provide explicit Flink type information;
 - fluent Flink calls preserve the façade;
+- entering the façade, and wrapping the streams Flink returns, leave the stream graph unchanged and drop none of the state Flink keeps on stream objects;
 - generated record serialization does not use Kotlin reflection;
 - generated types do not silently become generic/Kryo types;
 - normal Flink APIs can consume Flinkt stream subtypes;
@@ -746,6 +780,8 @@ Review should focus on the boundaries where Kotlin convenience can accidentally 
 **API resolution:** Does `stream.map { ... }` select the intended Kotlin overload? Can the underlying Flink overload still be used deliberately?
 
 **Façade preservation:** Do `name`, `uid`, `setParallelism`, and related calls keep the stream in the Flinkt type hierarchy?
+
+**Adaptation:** Does entering the façade, or wrapping a stream Flink returned, keep the same transformation and all the state Flink holds on the original object? Where it can't, does it fail explicitly?
 
 **Type propagation:** Whenever an operator introduces a new generic type, does Flink receive the complete `TypeInformation`, including nested generic arguments and nullability where relevant?
 

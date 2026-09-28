@@ -190,7 +190,23 @@ FlinktKeyedStream<T, K>
 
 This design produces better Kotlin source code, but it couples Flinkt more tightly to Flink's class hierarchy than a library of extension functions alone would be. The façade must therefore live in the version-specific Flink integration layer.
 
-When Flink changes constructors, abstract methods, return types, generic bounds, fluent configuration methods, or the class hierarchy, the corresponding adapter must be recompiled and reviewed. Application code should not need to know which internal façade implementation is active.
+When Flink changes constructors, abstract methods, return types, generic bounds, fluent configuration methods, the class hierarchy, or the state kept on stream objects, the corresponding adapter must be recompiled and reviewed. Application code should not need to know which internal façade implementation is active.
+
+### State on stream objects
+
+Flink keeps some configuration on its stream objects rather than on their `Transformation`. A second object built over the same transformation doesn't see it, so these fields decide what [adapting a Flink stream object](../README.md#adapting-flink-stream-objects) can reproduce. Checked against the Flink sources of the target lines:
+
+| Class | Field | Set by | Read by | Public read | Lines |
+|---|---|---|---|---|---|
+| `SingleOutputStreamOperator` | `nonParallel` | `forceNonParallel()`, which Flink also calls on `windowAll` results | `setParallelism`, `setMaxParallelism` | no (`protected`) | 1.20, 2.2, 2.3 |
+| `SingleOutputStreamOperator` | `requestedSideOutputs` | `getSideOutput` | `getSideOutput`, which rejects a known ID with a different type | no (`private`) | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `keySelector`, `keyType` | constructor | keyed operators | yes | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `isEnableAsyncState` | `enableAsyncState()` | keyed operators | no (package-private) | 2.2, 2.3 |
+| `DataStreamSource` | `isParallel` | constructor | `setParallelism` | no (package-private) | 1.20, 2.2, 2.3 |
+
+A `KeyedStream`'s `PartitionTransformation` behaves the same way. Its public constructors always create a new one, and only the package-private `@Internal` constructor accepts an existing one.
+
+New Flink minor lines can add fields here, as 2.0 added `isEnableAsyncState`. Adopting a line includes checking this table against its sources, and the adapter's [adapter contract tests](testing.md#flink-adapter-contract) cover every field listed for its line.
 
 ## Preserve fluent chains
 
@@ -390,6 +406,7 @@ The process should not assume compatibility merely because existing code compile
 DataStream hierarchy
 SingleOutputStreamOperator fluent API
 KeyedStream
+state kept on stream objects
 TypeInformation
 TypeSerializer
 TypeSerializerSnapshot

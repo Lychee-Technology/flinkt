@@ -37,7 +37,7 @@ Tests should protect a small set of invariants rather than mirror implementation
 4. Generated per-record code does not depend on Kotlin reflection.
 5. Flinkt serializers satisfy Flink's serializer contracts.
 6. Serializer snapshot compatibility results agree with real serialized bytes.
-7. Flinkt's façade remains usable across every supported Flink adapter.
+7. Flinkt's façade remains usable, and builds the same job as the Flink calls it stands for, on every supported Flink adapter.
 8. Persisted state can be restored across every upgrade path Flinkt claims to support.
 9. Flinkt's public Kotlin API does not change accidentally.
 
@@ -363,6 +363,24 @@ data class Key(
 
 tests should include equal and differing values at each key position. Comparator correctness should not be inferred from successful partitioning in one integration test.
 
+## Flink adapter contract
+
+Compile contracts show which static type a call returns. They can't show that the returned object behaves like the Flink object it stands for. Entering the façade builds new objects over Flink's transformations, and Flink keeps some configuration on the stream objects themselves ([State on stream objects](flink-compatibility.md#state-on-stream-objects)). A façade can therefore pass every compile contract and still change the job. These tests run against each adapter's real Flink classes. They only need to build the stream graph, not run it, so no MiniCluster is required.
+
+**Same graph as plain Flink.** Build a pipeline once through the façade and once with the Flink calls it stands for, passing the same `TypeInformation` explicitly so that the comparison checks structure rather than type inference. The generated stream graphs must match in nodes, edges, partitioners, parallelism, max parallelism, UIDs, and names. Compare structure, not generated IDs, since those come from a global counter. Cover entry through `env.flinkt()` and `stream.flinkt()`, the first-milestone chain, and a keyed pipeline.
+
+**Flink still acts on per-object state.** Every field listed for the adapter's line needs a case showing that Flink still acts on it through the façade. For example:
+
+```text
+façade windowAll result, then setParallelism(2)         → rejected, as in Flink
+façade operator, one side-output ID with two types       → rejected, as in Flink
+façade keyBy, enableAsyncState(), then façade process    → async state enabled on the operator
+```
+
+**Adaptation fails explicitly.** `.flinkt()` must reject a `KeyedStream`, including one typed as `DataStream<T>`, and any `DataStream` subclass the adapter doesn't recognize. The error names the class, and the environment's transformations are unchanged afterwards. A negative compile test checks that the adapted form of a `SingleOutputStreamOperator` doesn't offer `setParallelism` or `getSideOutput`.
+
+These tests run on every adapter lane, because the fields differ between Flink lines.
+
 ## Flink runtime integration
 
 MiniCluster tests establish that local components still work when assembled by a real Flink runtime. The integration pipeline should exercise the features that interact across boundaries, for example:
@@ -524,6 +542,7 @@ Each adapter lane should run at least:
 ```text
 Kotlin API compile contracts
 façade retention tests
+Flink adapter contract tests
 type-information contracts
 serializer contracts
 MiniCluster smoke tests
@@ -689,6 +708,7 @@ KSP compilation tests
 negative compilation tests
 API resolution tests
 façade retention tests
+Flink adapter contract tests (primary adapter)
 type-information contracts
 serializer contracts
 snapshot compatibility logic
@@ -787,6 +807,8 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 **Compile tests:** Does the test prove which Kotlin overload is selected, or merely that some overload compiles?
 
+**Façade behavior:** Would the test fail if entering the façade added a transformation or dropped state that Flink keeps on the stream object?
+
 **Type fallback:** Would the test fail if a generated type silently became generic/Kryo-serialized?
 
 **Serializer compatibility:** Does the test read bytes created by the old implementation, or are both writer and reader the new serializer?
@@ -810,6 +832,7 @@ A Flinkt release should not describe a combination as supported solely because i
 ```text
 the Kotlin API resolves correctly
 the façade survives normal Flink chaining
+the façade builds the same stream graph, and Flink still acts on per-object state
 supported types preserve their intended type information
 generated serializers satisfy their contracts
 no documented specialized type silently falls back to generic serialization
