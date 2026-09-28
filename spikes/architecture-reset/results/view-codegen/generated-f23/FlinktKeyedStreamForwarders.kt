@@ -7,14 +7,8 @@ import kotlin.Suppress
 import org.apache.flink.api.common.functions.ReduceFunction
 import org.apache.flink.streaming.api.datastream.KeyedStream
 
-/**
- * Generated from [KeyedStream] (Flink 2.3.0). Do not edit.
- */
 public sealed interface FlinktKeyedStreamForwarders<T, KEY> : FlinktDataStreamForwarders<T> {
   public override fun asFlink(): KeyedStream<T, KEY>
 
-  /**
-   * Calls [KeyedStream.reduce][org.apache.flink.streaming.api.datastream.KeyedStream.reduce] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun reduce(reducer: ReduceFunction<T>): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().reduce(reducer))
 }

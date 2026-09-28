@@ -69,7 +69,7 @@ class ViewCodegen(
     private val report = StringBuilder()
     private lateinit var resolver: Resolver
 
-    /** Parameter names extracted from Flink's sources, keyed by class#name+descriptor. */
+    /** Parameter names read from Flink's class files, keyed by class#name+descriptor. */
     private class ApiEntry(val names: List<String>)
     private val api: Map<String, ApiEntry> by lazy {
         val path = options["flinkt.flinkApi"] ?: error("ksp arg flinkt.flinkApi (the extracted Flink API file) is missing")
@@ -122,7 +122,6 @@ class ViewCodegen(
         val iface = TypeSpec.interfaceBuilder(spec.forwardersName)
             .addModifiers(KModifier.PUBLIC, KModifier.SEALED)
             .addTypeVariables(typeVars)
-            .addKdoc("Generated from [%T] (Flink %L). Do not edit.\n", flink.toClassName(), options["flinkt.flinkVersion"] ?: "?")
         if (parent != null) {
             val parentSpec = viewOf.getValue(parent.declaration.qualifiedName!!.asString())
             iface.addSuperinterface(parentSpec.forwardersName.parameterizedBy(parent.arguments.map { it.toTypeName(classTypeParams) }))
@@ -206,10 +205,6 @@ class ViewCodegen(
             .addTypeVariables(fn.typeParameters.map { typeVar(it, resolver) })
             .addParameters(fn.parameters.mapIndexed { i, p -> parameter(fn, p, i, viewOf, resolver) })
             .returns(kotlinReturn)
-            .addKdoc(
-                "Calls [%L.%L][%L.%L] on [asFlink]; see Flink's documentation of that method.\n",
-                spec.flink.simpleName.asString(), fn.simpleName.asString(), flinkName, fn.simpleName.asString(),
-            )
             .apply { if (experimental) addAnnotation(ClassName(spec.view.packageName.asString(), "ExperimentalFlinkApi")) }
             .apply {
                 if (deprecated) {

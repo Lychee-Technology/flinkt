@@ -1,15 +1,13 @@
-// SPIKE: extracts the parameter names of Flink's stream classes from Flink's sources jar, keyed by the JVM
-// descriptor that the compiled class has, into a file the view codegen reads. Flink's jars carry no
-// MethodParameters attribute, so the compiler (and KSP) see p0, p1, ...
+// SPIKE: reads the parameter names of Flink's stream classes from their class files and writes them, keyed by
+// JVM descriptor, to a file the view codegen reads. Flink's jars have no MethodParameters attribute, so the
+// Kotlin compiler (and KSP) see p0, p1, ...; the names survive in the LocalVariableTable debug information.
 package flinkt.extract
 
-import com.github.javaparser.JavaParser
-import com.github.javaparser.ParserConfiguration
-import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration
-import com.github.javaparser.symbolsolver.JavaSymbolSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.JarTypeSolver
-import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.Opcodes
+import org.objectweb.asm.Type
+import org.objectweb.asm.tree.ClassNode
+import org.objectweb.asm.tree.MethodNode
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -20,70 +18,49 @@ private val CLASSES = listOf(
 )
 
 fun main(args: Array<String>) {
-    val (version, sourcesJar, output) = args
-    val solver = CombinedTypeSolver(ReflectionTypeSolver(), *args.drop(3).map { JarTypeSolver(it) }.toTypedArray())
-    val parser = JavaParser(
-        ParserConfiguration()
-            .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17)
-            .setSymbolResolver(JavaSymbolSolver(solver)),
-    )
-    val loader = java.net.URLClassLoader(args.drop(3).map { File(it).toURI().toURL() }.toTypedArray(), null)
+    val (version, output) = args
+    val jars = args.drop(2).map(::ZipFile)
     val rows = mutableListOf<String>()
+    val sources = mutableSetOf<String>()
     var failures = 0
-    ZipFile(sourcesJar).use { zip ->
-        for (cls in CLASSES) {
-            val entry = zip.getEntry(cls.replace('.', '/') + ".java") ?: error("$cls not in $sourcesJar")
-            val cu = parser.parse(zip.getInputStream(entry)).result.orElseThrow()
-            val type = cu.getClassByName(cls.substringAfterLast('.')).orElseThrow()
-            for (m in type.methods.filter { it.isPublic && !it.isStatic }) {
-                val descriptor = runCatching { nestedFixed(varargsFixed(m.resolve().toDescriptor(), m.parameters.lastOrNull()?.isVarArgs == true), loader) }.getOrElse {
-                    failures++
-                    System.err.println("unresolved: $cls.${m.signature}: ${it.message}")
-                    continue
-                }
-                val names = m.parameters.joinToString(",") { it.nameAsString }
-                rows += listOf(cls, m.nameAsString, descriptor, names).joinToString("\t")
+    for (cls in CLASSES) {
+        val path = cls.replace('.', '/') + ".class"
+        val jar = jars.firstOrNull { it.getEntry(path) != null } ?: error("$cls is not in the given jars")
+        sources += File(jar.name).name
+        val node = ClassNode().also { ClassReader(jar.getInputStream(jar.getEntry(path)).readBytes()).accept(it, 0) }
+        for (m in node.methods) {
+            val skip = Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_BRIDGE
+            if (m.access and Opcodes.ACC_PUBLIC == 0 || m.access and skip != 0 || m.name.startsWith("<")) continue
+            val names = parameterNames(m)
+            if (names == null) {
+                failures++
+                System.err.println("no parameter names in the class file: $cls.${m.name}${m.desc}")
+                continue
             }
+            rows += listOf(cls, m.name, m.desc, names.joinToString(",")).joinToString("\t")
         }
     }
-    // Ground truth is the class file: both JavaParser and KSP's mapToJvmSignature drop the varargs array marker,
-    // and JavaParser writes nested types as Outer/Inner instead of Outer$Inner.
-    for (cls in CLASSES) {
-        val c = Class.forName(cls, false, loader)
-        val binary = c.declaredMethods
-            .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) && !java.lang.reflect.Modifier.isStatic(it.modifiers) && !it.isSynthetic && !it.isBridge }
-            .map { "${it.name}${java.lang.invoke.MethodType.methodType(it.returnType, it.parameterTypes).toMethodDescriptorString()}" }
-            .toSet()
-        val extracted = rows.filter { it.startsWith("$cls\t") }.map { it.split('\t').let { c -> c[1] + c[2] } }.toSet()
-        (extracted - binary).forEach { failures++; System.err.println("not in the class file: $cls.$it") }
-        (binary - extracted).forEach { failures++; System.err.println("in the class file but not extracted: $cls.$it") }
-    }
     File(output).writeText(
-        "# Flink $version stream API, extracted from ${File(sourcesJar).name}. Regenerate; do not edit.\n" +
+        "# Flink $version stream API parameter names, read from ${sources.sorted().joinToString()}. Regenerate; do not edit.\n" +
             "# flink-version\t$version\n" +
             rows.sorted().joinToString("\n") + "\n",
     )
-    println("$output: ${rows.size} methods, $failures unresolved")
+    println("$output: ${rows.size} methods, $failures without names")
     if (failures > 0) kotlin.system.exitProcess(1)
 }
 
-/** JavaParser writes a nested type as Outer/Inner; the class file has Outer$Inner. Resolve each type against the jars. */
-private fun nestedFixed(descriptor: String, loader: ClassLoader): String =
-    Regex("L([^;]+);").replace(descriptor) { m ->
-        var name = m.groupValues[1].replace('/', '.')
-        while (runCatching { Class.forName(name, false, loader) }.isFailure && '.' in name) {
-            val i = name.lastIndexOf('.')
-            name = name.substring(0, i) + '$' + name.substring(i + 1)
-        }
-        "L" + name.replace('.', '/') + ";"
+/**
+ * The MethodParameters attribute if the class has one, else the LocalVariableTable entries of the parameter
+ * slots (slot 0 is `this`; long and double take two slots). A parameter's entry is the one whose range starts
+ * first, since parameters are live from the method's first instruction.
+ */
+private fun parameterNames(m: MethodNode): List<String>? {
+    val types = Type.getArgumentTypes(m.desc)
+    m.parameters?.map { it.name }?.takeIf { it.size == types.size && it.none { n -> n == null } }?.let { return it }
+    var slot = 1
+    return types.map { t ->
+        val entry = m.localVariables.orEmpty().filter { it.index == slot }.minByOrNull { m.instructions.indexOf(it.start) }
+        slot += t.size
+        entry?.name ?: return null
     }
-
-/** JavaParser's descriptor omits the array marker of a varargs parameter; the class file has it. */
-private fun varargsFixed(descriptor: String, lastIsVarargs: Boolean): String {
-    if (!lastIsVarargs) return descriptor
-    val params = descriptor.substring(1, descriptor.indexOf(')'))
-    val parts = Regex("\\[*(?:L[^;]+;|[BCDFIJSZ])").findAll(params).map { it.value }.toMutableList()
-    parts[parts.lastIndex] = "[" + parts.last()
-    return "(" + parts.joinToString("") + descriptor.substring(descriptor.indexOf(')'))
 }
-

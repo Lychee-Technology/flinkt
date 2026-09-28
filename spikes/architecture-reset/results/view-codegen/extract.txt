@@ -1,2 +1,2 @@
-/tmp/claude-1000/-home-ruoshi-code-flinkt/48db61e5-fb06-48fd-b0e2-6d26ede00b0a/scratchpad/spike-wt/spikes/architecture-reset/view-codegen/views-f23/flink-api.tsv: 103 methods, 0 unresolved
-/tmp/claude-1000/-home-ruoshi-code-flinkt/48db61e5-fb06-48fd-b0e2-6d26ede00b0a/scratchpad/spike-wt/spikes/architecture-reset/view-codegen/views-f120/flink-api.tsv: 120 methods, 0 unresolved
+/tmp/claude-1000/-home-ruoshi-code-flinkt/48db61e5-fb06-48fd-b0e2-6d26ede00b0a/scratchpad/spike-wt/spikes/architecture-reset/view-codegen/views-f23/flink-api.tsv: 103 methods, 0 without names
+/tmp/claude-1000/-home-ruoshi-code-flinkt/48db61e5-fb06-48fd-b0e2-6d26ede00b0a/scratchpad/spike-wt/spikes/architecture-reset/view-codegen/views-f120/flink-api.tsv: 120 methods, 0 without names

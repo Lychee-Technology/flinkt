@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Extracts Flink's parameter names from its sources jars, generates the view forwarders against Flink 2.3.0
+# Reads Flink's parameter names from its class files, generates the view forwarders against Flink 2.3.0
 # and 1.20.5, runs the probe on each, and checks the generator's refusals, the stability markers it carries
 # over, and the guards on the extracted names file. Needs JDK 25 and GRADLE=/path/to/gradle (9.x).
 # Writes ../results/view-codegen/.
@@ -9,7 +9,7 @@ G=${GRADLE:-gradle}; DS=org.apache.flink.streaming.api.datastream
 cd $HERE
 ksp_errors() { grep "^e: \[ksp\]" | sed 's/^e: \[ksp\] [^:]*:[0-9]*: //; s/^e: \[ksp\] //; s/org\.apache\.flink\.[a-z.]*\.//g'; }
 
-# 1. Names from Flink's sources, every descriptor checked against the class files.
+# 1. Parameter names from the LocalVariableTable of Flink's class files; fails if any public method has none.
 $G --no-daemon -q :extractor:extract_f23 :extractor:extract_f120 2>&1 | grep -v "^w: " > $R/extract.txt
 
 # 2. Generate, compile and run on each line.

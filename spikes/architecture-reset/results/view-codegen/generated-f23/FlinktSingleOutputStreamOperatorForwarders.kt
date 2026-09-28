@@ -10,69 +10,30 @@ import kotlin.Suppress
 import org.apache.flink.api.common.operators.SlotSharingGroup
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator
 
-/**
- * Generated from [SingleOutputStreamOperator] (Flink 2.3.0). Do not edit.
- */
 public sealed interface FlinktSingleOutputStreamOperatorForwarders<T> : FlinktDataStreamForwarders<T> {
   public override fun asFlink(): SingleOutputStreamOperator<T>
 
-  /**
-   * Calls [SingleOutputStreamOperator.name][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.name] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun name(name: String): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().name(name))
 
-  /**
-   * Calls [SingleOutputStreamOperator.uid][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.uid] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun uid(uid: String): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().uid(uid))
 
-  /**
-   * Calls [SingleOutputStreamOperator.setUidHash][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setUidHash] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun setUidHash(uidHash: String): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().setUidHash(uidHash))
 
-  /**
-   * Calls [SingleOutputStreamOperator.setDescription][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setDescription] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun setDescription(description: String): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().setDescription(description))
 
-  /**
-   * Calls [SingleOutputStreamOperator.setParallelism][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setParallelism] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun setParallelism(parallelism: Int): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().setParallelism(parallelism))
 
-  /**
-   * Calls [SingleOutputStreamOperator.setMaxParallelism][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setMaxParallelism] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun setMaxParallelism(maxParallelism: Int): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().setMaxParallelism(maxParallelism))
 
-  /**
-   * Calls [SingleOutputStreamOperator.forceNonParallel][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.forceNonParallel] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun forceNonParallel(): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().forceNonParallel())
 
-  /**
-   * Calls [SingleOutputStreamOperator.setBufferTimeout][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setBufferTimeout] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun setBufferTimeout(timeoutMillis: Long): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().setBufferTimeout(timeoutMillis))
 
-  /**
-   * Calls [SingleOutputStreamOperator.slotSharingGroup][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.slotSharingGroup] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun slotSharingGroup(slotSharingGroup: String): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().slotSharingGroup(slotSharingGroup))
 
-  /**
-   * Calls [SingleOutputStreamOperator.slotSharingGroup][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.slotSharingGroup] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun slotSharingGroup(slotSharingGroup: SlotSharingGroup): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().slotSharingGroup(slotSharingGroup))
 
-  /**
-   * Calls [SingleOutputStreamOperator.startNewChain][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.startNewChain] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun startNewChain(): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().startNewChain())
 
-  /**
-   * Calls [SingleOutputStreamOperator.disableChaining][org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.disableChaining] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun disableChaining(): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().disableChaining())
 }

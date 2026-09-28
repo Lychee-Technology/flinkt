@@ -17,104 +17,44 @@ import org.apache.flink.streaming.api.datastream.DataStream
 import org.apache.flink.streaming.api.datastream.DataStreamSink
 import org.apache.flink.util.CloseableIterator
 
-/**
- * Generated from [DataStream] (Flink 2.3.0). Do not edit.
- */
 public sealed interface FlinktDataStreamForwarders<T> {
   public fun asFlink(): DataStream<T>
 
-  /**
-   * Calls [DataStream.filter][org.apache.flink.streaming.api.datastream.DataStream.filter] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun filter(filter: FilterFunction<T>): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().filter(filter))
 
-  /**
-   * Calls [DataStream.union][org.apache.flink.streaming.api.datastream.DataStream.union] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun union(vararg streams: FlinktDataStream<T>): FlinktDataStream<T> = FlinktDataStream(asFlink().union(*streams.map { it.asFlink() }.toTypedArray()))
 
-  /**
-   * Calls [DataStream.rebalance][org.apache.flink.streaming.api.datastream.DataStream.rebalance] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun rebalance(): FlinktDataStream<T> = FlinktDataStream(asFlink().rebalance())
 
-  /**
-   * Calls [DataStream.rescale][org.apache.flink.streaming.api.datastream.DataStream.rescale] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun rescale(): FlinktDataStream<T> = FlinktDataStream(asFlink().rescale())
 
-  /**
-   * Calls [DataStream.shuffle][org.apache.flink.streaming.api.datastream.DataStream.shuffle] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun shuffle(): FlinktDataStream<T> = FlinktDataStream(asFlink().shuffle())
 
-  /**
-   * Calls [DataStream.forward][org.apache.flink.streaming.api.datastream.DataStream.forward] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun forward(): FlinktDataStream<T> = FlinktDataStream(asFlink().forward())
 
-  /**
-   * Calls [DataStream.global][org.apache.flink.streaming.api.datastream.DataStream.global] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun global(): FlinktDataStream<T> = FlinktDataStream(asFlink().global())
 
-  /**
-   * Calls [DataStream.partitionCustom][org.apache.flink.streaming.api.datastream.DataStream.partitionCustom] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun <K> partitionCustom(partitioner: Partitioner<K>, keySelector: KeySelector<T, K>): FlinktDataStream<T> = FlinktDataStream(asFlink().partitionCustom(partitioner, keySelector))
 
-  /**
-   * Calls [DataStream.assignTimestampsAndWatermarks][org.apache.flink.streaming.api.datastream.DataStream.assignTimestampsAndWatermarks] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun assignTimestampsAndWatermarks(watermarkStrategy: WatermarkStrategy<T>): FlinktSingleOutputStreamOperator<T> = FlinktSingleOutputStreamOperator(asFlink().assignTimestampsAndWatermarks(watermarkStrategy))
 
-  /**
-   * Calls [DataStream.sinkTo][org.apache.flink.streaming.api.datastream.DataStream.sinkTo] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun sinkTo(sink: Sink<T>): DataStreamSink<T> = asFlink().sinkTo(sink)
 
-  /**
-   * Calls [DataStream.sinkTo][org.apache.flink.streaming.api.datastream.DataStream.sinkTo] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun sinkTo(sink: Sink<T>, customSinkOperatorUidHashes: CustomSinkOperatorUidHashes): DataStreamSink<T> = asFlink().sinkTo(sink, customSinkOperatorUidHashes)
 
-  /**
-   * Calls [DataStream.print][org.apache.flink.streaming.api.datastream.DataStream.print] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun print(): DataStreamSink<T> = asFlink().print()
 
-  /**
-   * Calls [DataStream.print][org.apache.flink.streaming.api.datastream.DataStream.print] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun print(sinkIdentifier: String): DataStreamSink<T> = asFlink().print(sinkIdentifier)
 
-  /**
-   * Calls [DataStream.printToErr][org.apache.flink.streaming.api.datastream.DataStream.printToErr] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun printToErr(): DataStreamSink<T> = asFlink().printToErr()
 
-  /**
-   * Calls [DataStream.printToErr][org.apache.flink.streaming.api.datastream.DataStream.printToErr] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun printToErr(sinkIdentifier: String): DataStreamSink<T> = asFlink().printToErr(sinkIdentifier)
 
-  /**
-   * Calls [DataStream.executeAndCollect][org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun executeAndCollect(): CloseableIterator<T> = asFlink().executeAndCollect()
 
-  /**
-   * Calls [DataStream.executeAndCollect][org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun executeAndCollect(jobExecutionName: String): CloseableIterator<T> = asFlink().executeAndCollect(jobExecutionName)
 
-  /**
-   * Calls [DataStream.executeAndCollect][org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun executeAndCollect(limit: Int): List<T> = asFlink().executeAndCollect(limit)
 
-  /**
-   * Calls [DataStream.executeAndCollect][org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect] on [asFlink]; see Flink's documentation of that method.
-   */
   public fun executeAndCollect(jobExecutionName: String, limit: Int): List<T> = asFlink().executeAndCollect(jobExecutionName, limit)
 }

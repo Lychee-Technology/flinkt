@@ -1,4 +1,4 @@
-# Flink 2.3.0 stream API, extracted from flink-runtime-2.3.0-sources.jar. Regenerate; do not edit.
+# Flink 2.3.0 stream API parameter names, read from flink-runtime-2.3.0.jar. Regenerate; do not edit.
 # flink-version	2.3.0
 org.apache.flink.streaming.api.datastream.DataStream	addSink	(Lorg/apache/flink/streaming/api/functions/sink/legacy/SinkFunction;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;	sinkFunction
 org.apache.flink.streaming.api.datastream.DataStream	assignTimestampsAndWatermarks	(Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;	watermarkStrategy
