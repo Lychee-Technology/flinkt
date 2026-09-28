@@ -1,0 +1,54 @@
+f23 DataStream#map
+DataStream.map(p0: (MapFunction<(T..T?), (R..R?)>..MapFunction<(T..T?), (R..R?)>?)) introduces an element type ((SingleOutputStreamOperator<(R..R?)>..SingleOutputStreamOperator<(R..R?)>?)); write it by hand with a reified type parameter
+DataStream.map(p0: (MapFunction<(T..T?), (R..R?)>..MapFunction<(T..T?), (R..R?)>?), p1: (TypeInformation<(R..R?)>..TypeInformation<(R..R?)>?)) introduces an element type ((SingleOutputStreamOperator<(R..R?)>..SingleOutputStreamOperator<(R..R?)>?)); write it by hand with a reified type parameter
+
+f23 DataStream#connect
+DataStream.connect(p0: (DataStream<(R..R?)>..DataStream<(R..R?)>?)) introduces an element type ((ConnectedStreams<(T..T?), (R..R?)>..ConnectedStreams<(T..T?), (R..R?)>?)); write it by hand with a reified type parameter
+DataStream.connect(p0: (BroadcastStream<(R..R?)>..BroadcastStream<(R..R?)>?)) introduces an element type ((BroadcastConnectedStream<(T..T?), (R..R?)>..BroadcastConnectedStream<(T..T?), (R..R?)>?)); write it by hand with a reified type parameter
+
+f23 DataStream#broadcast
+DataStream.broadcast(vararg p0: (MapStateDescriptor<*, *>..MapStateDescriptor<*, *>?)) returns BroadcastStream, which has no view; forwarding it would let a chain leave the view without asFlink()
+
+f23 DataStream#getTransformation
+DataStream.getTransformation() is @Internal; views call only public Flink methods
+
+f23 DataStream#process
+DataStream.process(p0: (ProcessFunction<(T..T?), (R..R?)>..ProcessFunction<(T..T?), (R..R?)>?)) introduces an element type ((SingleOutputStreamOperator<(R..R?)>..SingleOutputStreamOperator<(R..R?)>?)); write it by hand with a reified type parameter
+DataStream.process(p0: (ProcessFunction<(T..T?), (R..R?)>..ProcessFunction<(T..T?), (R..R?)>?), p1: (TypeInformation<(R..R?)>..TypeInformation<(R..R?)>?)) is @Internal; views call only public Flink methods
+
+f23 SingleOutputStreamOperator#enableAsyncState
+SingleOutputStreamOperator.enableAsyncState() is @Experimental; it needs a documented exception before a view offers it
+
+f23 SingleOutputStreamOperator#getSideOutput
+SingleOutputStreamOperator.getSideOutput(p0: (OutputTag<(X..X?)>..OutputTag<(X..X?)>?)) introduces an element type ((SideOutputDataStream<(X..X?)>..SideOutputDataStream<(X..X?)>?)); write it by hand with a reified type parameter
+
+f23 DataStream#noSuchMethod
+noSuchMethod is not declared on DataStream in Flink 2.3.0; remove it from @FlinkView or move it to a line-specific view
+
+f120 DataStream#map
+DataStream.map(p0: (MapFunction<(T..T?), (R..R?)>..MapFunction<(T..T?), (R..R?)>?)) introduces an element type ((SingleOutputStreamOperator<(R..R?)>..SingleOutputStreamOperator<(R..R?)>?)); write it by hand with a reified type parameter
+DataStream.map(p0: (MapFunction<(T..T?), (R..R?)>..MapFunction<(T..T?), (R..R?)>?), p1: (TypeInformation<(R..R?)>..TypeInformation<(R..R?)>?)) introduces an element type ((SingleOutputStreamOperator<(R..R?)>..SingleOutputStreamOperator<(R..R?)>?)); write it by hand with a reified type parameter
+
+f120 DataStream#connect
+DataStream.connect(p0: (DataStream<(R..R?)>..DataStream<(R..R?)>?)) introduces an element type ((ConnectedStreams<(T..T?), (R..R?)>..ConnectedStreams<(T..T?), (R..R?)>?)); write it by hand with a reified type parameter
+DataStream.connect(p0: (BroadcastStream<(R..R?)>..BroadcastStream<(R..R?)>?)) introduces an element type ((BroadcastConnectedStream<(T..T?), (R..R?)>..BroadcastConnectedStream<(T..T?), (R..R?)>?)); write it by hand with a reified type parameter
+
+f120 DataStream#broadcast
+DataStream.broadcast(vararg p0: (MapStateDescriptor<*, *>..MapStateDescriptor<*, *>?)) returns BroadcastStream, which has no view; forwarding it would let a chain leave the view without asFlink()
+
+f120 DataStream#getTransformation
+DataStream.getTransformation() is @Internal; views call only public Flink methods
+
+f120 DataStream#process
+DataStream.process(p0: (ProcessFunction<(T..T?), (R..R?)>..ProcessFunction<(T..T?), (R..R?)>?)) introduces an element type ((SingleOutputStreamOperator<(R..R?)>..SingleOutputStreamOperator<(R..R?)>?)); write it by hand with a reified type parameter
+DataStream.process(p0: (ProcessFunction<(T..T?), (R..R?)>..ProcessFunction<(T..T?), (R..R?)>?), p1: (TypeInformation<(R..R?)>..TypeInformation<(R..R?)>?)) is @Internal; views call only public Flink methods
+
+f120 SingleOutputStreamOperator#enableAsyncState
+enableAsyncState is not declared on SingleOutputStreamOperator in Flink 1.20.5; remove it from @FlinkView or move it to a line-specific view
+
+f120 SingleOutputStreamOperator#getSideOutput
+SingleOutputStreamOperator.getSideOutput(p0: (OutputTag<(X..X?)>..OutputTag<(X..X?)>?)) introduces an element type ((SideOutputDataStream<(X..X?)>..SideOutputDataStream<(X..X?)>?)); write it by hand with a reified type parameter
+
+f120 DataStream#noSuchMethod
+noSuchMethod is not declared on DataStream in Flink 1.20.5; remove it from @FlinkView or move it to a line-specific view
+

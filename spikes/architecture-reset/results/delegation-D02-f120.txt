@@ -1,0 +1,6 @@
+objects: fwd === op? false; fwd is a DataStream: true
+original.setMaxParallelism(2): rejected (IllegalArgumentException)
+forwarded  fwd.setParallelism(2): rejected (IllegalArgumentException)
+not forwarded fwd.setMaxParallelism(2): accepted
+partition steps, keyed.union(other): 1
+partition steps, ForwardingKeyed(keyed).union(other) (union is final, reads this.transformation): 2

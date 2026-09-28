@@ -3,3 +3,7 @@ tools/
 out/
 resolve/.gradle/
 resolve/build/
+view-codegen/**/build/
+view-codegen/.gradle/
+view-codegen/.kotlin/
+view-codegen/**/.kotlin/

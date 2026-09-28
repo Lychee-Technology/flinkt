@@ -1,0 +1,4 @@
+delegation/D01_by_delegation.kt:2:26: error: no value passed for parameter 'p0'.
+delegation/D01_by_delegation.kt:2:26: error: no value passed for parameter 'p1'.
+delegation/D01_by_delegation.kt:2:54: error: delegation is supported only for interfaces.
+delegation/D01_by_delegation.kt:2:54: error: this type has a constructor, so it must be initialized here.

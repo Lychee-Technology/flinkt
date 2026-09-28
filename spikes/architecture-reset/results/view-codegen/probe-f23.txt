@@ -1,0 +1,4 @@
+result: [1, 2, 3, 4, 4]
+original setMaxParallelism(2): rejected (IllegalArgumentException)
+view (generated) setMaxParallelism(2): rejected (IllegalArgumentException)
+view is the same object: true

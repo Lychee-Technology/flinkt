@@ -1,0 +1,33 @@
+public fun asFlink(): DataStream<T>
+public fun assignTimestampsAndWatermarks(watermarkStrategy: WatermarkStrategy<T>): FlinktSingleOutputStreamOperator<T>
+public fun disableChaining(): FlinktSingleOutputStreamOperator<T>
+public fun executeAndCollect(): CloseableIterator<T>
+public fun executeAndCollect(executeAndCollect: Int): List<T>
+public fun executeAndCollect(executeAndCollect: String): CloseableIterator<T>
+public fun executeAndCollect(string: String, int: Int): List<T>
+public fun filter(filterFunction: FilterFunction<T>): FlinktSingleOutputStreamOperator<T>
+public fun forceNonParallel(): FlinktSingleOutputStreamOperator<T>
+public fun forward(): FlinktDataStream<T>
+public fun global(): FlinktDataStream<T>
+public fun <K> partitionCustom(partitioner: Partitioner<K>, keySelector: KeySelector<T, K>): FlinktDataStream<T>
+public fun name(name: String): FlinktSingleOutputStreamOperator<T>
+public fun print(): DataStreamSink<T>
+public fun print(print: String): DataStreamSink<T>
+public fun printToErr(): DataStreamSink<T>
+public fun printToErr(printToErr: String): DataStreamSink<T>
+public fun rebalance(): FlinktDataStream<T>
+public fun reduce(reduceFunction: ReduceFunction<T>): FlinktSingleOutputStreamOperator<T>
+public fun rescale(): FlinktDataStream<T>
+public fun setBufferTimeout(bufferTimeout: Long): FlinktSingleOutputStreamOperator<T>
+public fun setDescription(description: String): FlinktSingleOutputStreamOperator<T>
+public fun setMaxParallelism(maxParallelism: Int): FlinktSingleOutputStreamOperator<T>
+public fun setParallelism(parallelism: Int): FlinktSingleOutputStreamOperator<T>
+public fun setUidHash(uidHash: String): FlinktSingleOutputStreamOperator<T>
+public fun shuffle(): FlinktDataStream<T>
+public fun sinkTo(sink: Sink<T>, customSinkOperatorUidHashes: CustomSinkOperatorUidHashes): DataStreamSink<T>
+public fun sinkTo(sink: Sink<T>): DataStreamSink<T>
+public fun slotSharingGroup(slotSharingGroup: SlotSharingGroup): FlinktSingleOutputStreamOperator<T>
+public fun slotSharingGroup(slotSharingGroup: String): FlinktSingleOutputStreamOperator<T>
+public fun startNewChain(): FlinktSingleOutputStreamOperator<T>
+public fun uid(uid: String): FlinktSingleOutputStreamOperator<T>
+public fun union(vararg dataStreams: FlinktDataStream<T>): FlinktDataStream<T>

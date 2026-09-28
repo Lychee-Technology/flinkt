@@ -1,0 +1,71 @@
+Flink 2.3.0
+
+== FlinktDataStream <- org.apache.flink.streaming.api.datastream.DataStream
+  org.apache.flink.streaming.api.datastream.DataStream.filter(p0: (FilterFunction<(T..T?)>..FilterFunction<(T..T?)>?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.DataStream.union(vararg p0: (DataStream<(T..T?)>..DataStream<(T..T?)>?)) -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, FINAL] @[SafeVarargs]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.rebalance() -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.rescale() -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.shuffle() -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.forward() -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.global() -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.partitionCustom(p0: (Partitioner<(K..K?)>..Partitioner<(K..K?)>?), p1: (KeySelector<(T..T?), (K..K?)>..KeySelector<(T..T?), (K..K?)>?)) -> (DataStream<(T..T?)>..DataStream<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktDataStream<T>
+  org.apache.flink.streaming.api.datastream.DataStream.assignTimestampsAndWatermarks(p0: (WatermarkStrategy<(T..T?)>..WatermarkStrategy<(T..T?)>?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.DataStream.sinkTo(p0: (Sink<(T..T?)>..Sink<(T..T?)>?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
+  org.apache.flink.streaming.api.datastream.DataStream.sinkTo(p0: (Sink<(T..T?)>..Sink<(T..T?)>?), p1: (CustomSinkOperatorUidHashes..CustomSinkOperatorUidHashes?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
+  org.apache.flink.streaming.api.datastream.DataStream.print() -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
+  org.apache.flink.streaming.api.datastream.DataStream.print(p0: (String..String?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
+  org.apache.flink.streaming.api.datastream.DataStream.printToErr() -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
+  org.apache.flink.streaming.api.datastream.DataStream.printToErr(p0: (String..String?)) -> (DataStreamSink<(T..T?)>..DataStreamSink<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> org.apache.flink.streaming.api.datastream.DataStreamSink<T>
+  org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect() -> (CloseableIterator<(T..T?)>..CloseableIterator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> org.apache.flink.util.CloseableIterator<T>
+  org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect(p0: (String..String?)) -> (CloseableIterator<(T..T?)>..CloseableIterator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> org.apache.flink.util.CloseableIterator<T>
+  org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect(p0: Int) -> (MutableList<(T..T?)>..List<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> kotlin.collections.List<T>
+  org.apache.flink.streaming.api.datastream.DataStream.executeAndCollect(p0: (String..String?), p1: Int) -> (MutableList<(T..T?)>..List<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> kotlin.collections.List<T>
+
+== FlinktSingleOutputStreamOperator <- org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.name(p0: (String..String?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.uid(p0: (String..String?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setUidHash(p0: (String..String?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setDescription(p0: (String..String?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setParallelism(p0: Int) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setMaxParallelism(p0: Int) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.forceNonParallel() -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.setBufferTimeout(p0: Long) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.slotSharingGroup(p0: (String..String?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.slotSharingGroup(p0: (SlotSharingGroup..SlotSharingGroup?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.startNewChain() -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+  org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator.disableChaining() -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[PublicEvolving]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>
+
+== FlinktKeyedStream <- org.apache.flink.streaming.api.datastream.KeyedStream
+  org.apache.flink.streaming.api.datastream.KeyedStream.reduce(p0: (ReduceFunction<(T..T?)>..ReduceFunction<(T..T?)>?)) -> (SingleOutputStreamOperator<(T..T?)>..SingleOutputStreamOperator<(T..T?)>?) [PUBLIC, OPEN] @[]
+    generated -> flinkt.views.FlinktSingleOutputStreamOperator<T>

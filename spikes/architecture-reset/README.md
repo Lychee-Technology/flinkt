@@ -17,6 +17,8 @@ Versions: Kotlin 2.4.20 (`kotlinc`, plus `-language-version 2.0` for the negativ
 | `line120/`, `line2x/` | The only per-line source the spike needed: 1.20 still declares `TypeInformation.createSerializer(ExecutionConfig)` abstract. |
 | `probes/` | Resolution and static types, graph and per-object state, MiniCluster run, the `pipeline.generic-types` safety net, exact-type helpers. |
 | `docs-api/` | The first-slice view API with the names and signatures the design documents use, and the README's code compiled against it (`build.sh <line> <out> docs-api/*.kt`). Compiles on all three lines. |
+| `delegation/` | Kotlin `by` delegation to `DataStream` (doesn't compile: only interfaces can be delegated) and a subclass that forwards by hand (a missed method acts on the subclass's own state; `final union` adds a partition step for a keyed subclass). Run by `run-all.sh`. |
+| `view-codegen/` | Gradle project with a KSP processor that generates each view's forwarding members from the Flink classes on the compile classpath, for 2.3.0 and 1.20.5, plus a probe job and the generator's negative cases. `GRADLE=/path/to/gradle view-codegen/run-all.sh` writes `results/view-codegen/`. |
 | `neg/` | Compile probes that must fail (N08 is a probe that compiles; see its comment). |
 | `results/` | Output of `run-all.sh` for every line. |
 

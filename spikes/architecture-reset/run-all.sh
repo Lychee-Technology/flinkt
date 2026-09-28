@@ -26,3 +26,12 @@ for lv in default 2.0; do
     if [ -z "$msg" ]; then echo "$(basename $f): COMPILED"; else echo "$(basename $f): REJECTED"; echo "$msg" | sed 's/^/    /'; fi
   done > $R/negative-compile-f23-lv-$lv.txt
 done
+# Kotlin delegation cannot target Flink's stream classes; a hand-forwarding subclass shows why that matters.
+CP=$(ls $LIBS/f23/*.jar | tr '\n' ':')
+$KOTLINC -jvm-target 17 -cp "$CP" -d $OUT/deleg-d01 $HERE/delegation/D01_by_delegation.kt 2>&1 | grep "error:" | sed "s|$HERE/||" > $R/delegation-D01-f23.txt || true
+for l in f23 f120; do
+  CP=$(ls $LIBS/$l/*.jar | tr '\n' ':')
+  $KOTLINC -jvm-target 17 -no-reflect -cp "$CP" -d $OUT/deleg-$l $HERE/delegation/D02_forwarding.kt 2>&1 | grep "error:" || true
+  java --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED -Dorg.slf4j.simpleLogger.defaultLogLevel=warn \
+    -cp "$OUT/deleg-$l:$CP$(dirname $KOTLINC)/../lib/kotlin-stdlib.jar" deleg.D02_forwardingKt 2>&1 | grep -v "WARN\|SLF4J" > $R/delegation-D02-$l.txt
+done
