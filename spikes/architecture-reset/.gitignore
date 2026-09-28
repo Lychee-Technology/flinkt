@@ -1,0 +1,5 @@
+libs/
+tools/
+out/
+resolve/.gradle/
+resolve/build/

@@ -1,0 +1,12 @@
+f120 reachable (class,method) pairs: 256 | stream-returning non-final (subtype must override covariantly per class): 118 | builder-returning (exit unless wrapped): 42 | sink-returning: 48 | type-introducing (override cannot be reified): 36 | final: 3
+   KeyedStream overrides of DataStream methods: ['addSink(SinkFunction<T>)', 'doTransform(java.lang.String, TypeInformation<R>, StreamOperatorFactory<R>) [protected]', 'fullWindowPartition()', 'process(ProcessFunction<T, R>)', 'process(ProcessFunction<T, R>, TypeInformation<R>)', 'setConnectionType(StreamPartitioner<T>) [protected]']
+   SOSO overrides of DataStream methods: []
+   DataStreamSource overrides: ['setParallelism(int)']
+f22 reachable (class,method) pairs: 206 | stream-returning non-final (subtype must override covariantly per class): 97 | builder-returning (exit unless wrapped): 34 | sink-returning: 27 | type-introducing (override cannot be reified): 36 | final: 3
+   KeyedStream overrides of DataStream methods: ['addSink(SinkFunction<T>)', 'doTransform(java.lang.String, TypeInformation<R>, StreamOperatorFactory<R>) [protected]', 'flatMap(FlatMapFunction<T, R>, TypeInformation<R>)', 'fullWindowPartition()', 'setConnectionType(StreamPartitioner<T>) [protected]']
+   SOSO overrides of DataStream methods: []
+   DataStreamSource overrides: ['setParallelism(int)']
+f23 reachable (class,method) pairs: 206 | stream-returning non-final (subtype must override covariantly per class): 97 | builder-returning (exit unless wrapped): 34 | sink-returning: 27 | type-introducing (override cannot be reified): 36 | final: 3
+   KeyedStream overrides of DataStream methods: ['addSink(SinkFunction<T>)', 'doTransform(java.lang.String, TypeInformation<R>, StreamOperatorFactory<R>) [protected]', 'flatMap(FlatMapFunction<T, R>, TypeInformation<R>)', 'fullWindowPartition()', 'setConnectionType(StreamPartitioner<T>) [protected]']
+   SOSO overrides of DataStream methods: []
+   DataStreamSource overrides: ['setParallelism(int)']

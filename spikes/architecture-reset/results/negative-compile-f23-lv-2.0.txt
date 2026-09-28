@@ -1,0 +1,22 @@
+N01_reified_override.kt: REJECTED
+    neg/N01_reified_override.kt:9:26: error: override by a function with reified type parameter.
+    neg/N01_reified_override.kt:9:105: error: accessing super members from public-API inline function is deprecated.
+N02_same_signature_member.kt: REJECTED
+    neg/N02_same_signature_member.kt:9:28: error: 'map' hides member of supertype 'DataStream' and needs an 'override' modifier.
+N03_exact_type_subtype.kt: REJECTED
+    neg/N03_exact_type_subtype.kt:8:40: error: initializer type mismatch: expected 'Exactly<DataStream<String>>', actual 'Exactly<SubStream<String>>'.
+N04_state_descriptor_mismatch.kt: REJECTED
+    neg/N04_state_descriptor_mismatch.kt:7:39: error: initializer type mismatch: expected 'ValueStateDescriptor<User>', actual 'ValueState<uninferred ??? (Unknown type for type parameter T)>'.
+    neg/N04_state_descriptor_mismatch.kt:7:45: error: cannot infer type for type parameter 'T'. Specify it explicitly.
+N05_compose_no_silent_exit.kt: REJECTED
+    neg/N05_compose_no_silent_exit.kt:4:7: error: unresolved reference 'connect' on receiver of type 'FlinktStream<String>'.
+N06_compose_not_assignable.kt: REJECTED
+    neg/N06_compose_not_assignable.kt:5:31: error: initializer type mismatch: expected 'DataStream<String>', actual 'FlinktStream<String>'.
+N07_non_reified_generic.kt: REJECTED
+    neg/N07_non_reified_generic.kt:4:76: error: cannot use 'R' as reified type parameter. Use a class instead.
+N08_flatmap_infers_from_collector.kt: COMPILED
+N09_subtype_one_arg_reified_function_object.kt: REJECTED
+    neg/N09_subtype_one_arg_reified_function_object.kt:9:28: error: 'process' hides member of supertype 'KeyedStream' and needs an 'override' modifier.
+    neg/N09_subtype_one_arg_reified_function_object.kt:9:106: error: accessing super members from public-API inline function is deprecated.
+N10_shouldBe_rejects_subtype.kt: REJECTED
+    neg/N10_shouldBe_rejects_subtype.kt:6:54: error: candidate 'fun <U> Exactly<U>.shouldBe(): Unit' is inapplicable because of a receiver type mismatch.

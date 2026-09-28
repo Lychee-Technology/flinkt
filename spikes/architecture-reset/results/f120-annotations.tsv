@@ -1,0 +1,163 @@
+DataStream	public int getId();	@Internal
+DataStream	public ResourceSpec getMinResources();	@PublicEvolving
+DataStream	public ResourceSpec getPreferredResources();	@PublicEvolving
+DataStream	public <R extends java.lang.Object> BroadcastConnectedStream<T, R> connect(BroadcastStream<R>);	@PublicEvolving
+DataStream	public KeyedStream<T, Tuple> keyBy(int...);	 @Deprecated
+DataStream	public KeyedStream<T, Tuple> keyBy(java.lang.String...);	 @Deprecated
+DataStream	public <K extends java.lang.Object> DataStream<T> partitionCustom(Partitioner<K>, int);	 @Deprecated
+DataStream	public <K extends java.lang.Object> DataStream<T> partitionCustom(Partitioner<K>, java.lang.String);	 @Deprecated
+DataStream	public BroadcastStream<T> broadcast(MapStateDescriptor<?, ?>...);	@PublicEvolving
+DataStream	public DataStream<T> shuffle();	@PublicEvolving
+DataStream	public DataStream<T> rescale();	@PublicEvolving
+DataStream	public DataStream<T> global();	@PublicEvolving
+DataStream	public IterativeStream<T> iterate();	 @Deprecated
+DataStream	public IterativeStream<T> iterate(long);	 @Deprecated
+DataStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> process(ProcessFunction<T, R>);	@PublicEvolving
+DataStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> process(ProcessFunction<T, R>, TypeInformation<R>);	@Internal
+DataStream	public <R extends Tuple> SingleOutputStreamOperator<R> project(int...);	@PublicEvolving
+DataStream	public AllWindowedStream<T, TimeWindow> timeWindowAll(Time);	 @Deprecated
+DataStream	public AllWindowedStream<T, TimeWindow> timeWindowAll(Time, Time);	 @Deprecated
+DataStream	public <W extends Window> AllWindowedStream<T, W> windowAll(WindowAssigner<? super T, W>);	@PublicEvolving
+DataStream	public SingleOutputStreamOperator<T> assignTimestampsAndWatermarks(AssignerWithPeriodicWatermarks<T>);	 @Deprecated
+DataStream	public SingleOutputStreamOperator<T> assignTimestampsAndWatermarks(AssignerWithPunctuatedWatermarks<T>);	 @Deprecated
+DataStream	public DataStreamSink<T> print();	@PublicEvolving
+DataStream	public DataStreamSink<T> printToErr();	@PublicEvolving
+DataStream	public DataStreamSink<T> print(java.lang.String);	@PublicEvolving
+DataStream	public DataStreamSink<T> printToErr(java.lang.String);	@PublicEvolving
+DataStream	public DataStreamSink<T> writeAsText(java.lang.String);	@PublicEvolving @Deprecated
+DataStream	public DataStreamSink<T> writeAsText(java.lang.String, FileSystem$WriteMode);	@PublicEvolving @Deprecated
+DataStream	public DataStreamSink<T> writeAsCsv(java.lang.String);	@PublicEvolving @Deprecated
+DataStream	public DataStreamSink<T> writeAsCsv(java.lang.String, FileSystem$WriteMode);	@PublicEvolving @Deprecated
+DataStream	public <X extends Tuple> DataStreamSink<T> writeAsCsv(java.lang.String, FileSystem$WriteMode, java.lang.String, java.lang.String);	@PublicEvolving @Deprecated
+DataStream	public DataStreamSink<T> writeToSocket(java.lang.String, int, SerializationSchema<T>);	@PublicEvolving
+DataStream	public DataStreamSink<T> writeUsingOutputFormat(OutputFormat<T>);	@PublicEvolving @Deprecated
+DataStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> transform(java.lang.String, TypeInformation<R>, OneInputStreamOperator<T, R>);	@PublicEvolving
+DataStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> transform(java.lang.String, TypeInformation<R>, OneInputStreamOperatorFactory<T, R>);	@PublicEvolving
+DataStream	public DataStreamSink<T> sinkTo(Sink<T, ?, ?, ?>);	@PublicEvolving
+DataStream	public DataStreamSink<T> sinkTo(Sink<T, ?, ?, ?>, CustomSinkOperatorUidHashes);	@PublicEvolving
+DataStream	public DataStreamSink<T> sinkTo(sink2.Sink<T>);	@PublicEvolving
+DataStream	public DataStreamSink<T> sinkTo(sink2.Sink<T>, CustomSinkOperatorUidHashes);	@PublicEvolving
+DataStream	public CloseableIterator<T> collectAsync();	@Experimental
+DataStream	public void collectAsync(DataStream$Collector<T>);	@Experimental
+DataStream	public PartitionWindowedStream<T> fullWindowPartition();	@PublicEvolving
+DataStream	public Transformation<T> getTransformation();	@Internal @Public
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> uid(java.lang.String);	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> setUidHash(java.lang.String);	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> setMaxParallelism(int);	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> forceNonParallel();	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> disableChaining();	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> startNewChain();	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> slotSharingGroup(java.lang.String);	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> slotSharingGroup(SlotSharingGroup);	@PublicEvolving
+SingleOutputStreamOperator	public SingleOutputStreamOperator<T> setDescription(java.lang.String);	@PublicEvolving
+SingleOutputStreamOperator	public CachedDataStream<T> cache();	@PublicEvolving @Public
+KeyedStream	KeyedStream(DataStream<T>, PartitionTransformation<T>, KeySelector<T, KEY>, TypeInformation<KEY>);	@Internal
+KeyedStream	public KeySelector<T, KEY> getKeySelector();	@Internal
+KeyedStream	public TypeInformation<KEY> getKeyType();	@Internal
+KeyedStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> process(ProcessFunction<T, R>);	@PublicEvolving @Deprecated
+KeyedStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> process(ProcessFunction<T, R>, TypeInformation<R>);	@Internal @Deprecated
+KeyedStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> process(KeyedProcessFunction<KEY, T, R>);	@PublicEvolving
+KeyedStream	public <R extends java.lang.Object> SingleOutputStreamOperator<R> process(KeyedProcessFunction<KEY, T, R>, TypeInformation<R>);	@Internal
+KeyedStream	public <T1 extends java.lang.Object> KeyedStream$IntervalJoin<T, T1, KEY> intervalJoin(KeyedStream<T1, KEY>);	@PublicEvolving
+KeyedStream	public WindowedStream<T, KEY, TimeWindow> timeWindow(Time);	 @Deprecated
+KeyedStream	public WindowedStream<T, KEY, TimeWindow> timeWindow(Time, Time);	 @Deprecated
+KeyedStream	public <W extends Window> WindowedStream<T, KEY, W> window(WindowAssigner<? super T, W>);	@PublicEvolving
+KeyedStream	public PartitionWindowedStream<T> fullWindowPartition();	@PublicEvolving
+KeyedStream	public QueryableStateStream<KEY, T> asQueryableState(java.lang.String);	@PublicEvolving @Deprecated
+KeyedStream	public QueryableStateStream<KEY, T> asQueryableState(java.lang.String, ValueStateDescriptor<T>);	@PublicEvolving @Deprecated
+KeyedStream	public QueryableStateStream<KEY, T> asQueryableState(java.lang.String, ReducingStateDescriptor<T>);	@PublicEvolving @Public @Deprecated
+StreamExecutionEnvironment	public void registerCollectIterator(CollectResultIterator<?>);	@Internal
+StreamExecutionEnvironment	public StreamExecutionEnvironment(Configuration);	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment(Configuration, java.lang.ClassLoader);	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment(PipelineExecutorServiceLoader, Configuration, java.lang.ClassLoader);	@PublicEvolving
+StreamExecutionEnvironment	public java.util.List<JobListener> getJobListeners();	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment setRuntimeMode(RuntimeExecutionMode);	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment registerSlotSharingGroup(SlotSharingGroup);	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment disableOperatorChaining();	@PublicEvolving
+StreamExecutionEnvironment	public boolean isChainingEnabled();	@PublicEvolving
+StreamExecutionEnvironment	public boolean isChainingOfOperatorsWithDifferentMaxParallelismEnabled();	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment enableCheckpointing(long, CheckpointingMode);	 @Deprecated
+StreamExecutionEnvironment	public StreamExecutionEnvironment enableCheckpointing(long, CheckpointingMode, boolean);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public StreamExecutionEnvironment enableCheckpointing();	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public boolean isForceCheckpointing();	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public boolean isUnalignedCheckpointsEnabled();	@PublicEvolving
+StreamExecutionEnvironment	public boolean isForceUnalignedCheckpoints();	@PublicEvolving
+StreamExecutionEnvironment	public CheckpointingMode getCheckpointingMode();	 @Deprecated
+StreamExecutionEnvironment	public StreamExecutionEnvironment setStateBackend(StateBackend);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public StateBackend getStateBackend();	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public StreamExecutionEnvironment enableChangelogStateBackend(boolean);	@PublicEvolving
+StreamExecutionEnvironment	public TernaryBoolean isChangelogStateBackendEnabled();	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment setDefaultSavepointDirectory(java.lang.String);	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment setDefaultSavepointDirectory(java.net.URI);	@PublicEvolving
+StreamExecutionEnvironment	public StreamExecutionEnvironment setDefaultSavepointDirectory(Path);	@PublicEvolving
+StreamExecutionEnvironment	public Path getDefaultSavepointDirectory();	@PublicEvolving
+StreamExecutionEnvironment	public void setRestartStrategy(RestartStrategies$RestartStrategyConfiguration);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public RestartStrategies$RestartStrategyConfiguration getRestartStrategy();	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public void setNumberOfExecutionRetries(int);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public int getNumberOfExecutionRetries();	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public <T extends com.esotericsoftware.kryo.Serializer<?> & java.io.Serializable> void addDefaultKryoSerializer(java.lang.Class<?>, T);	 @Deprecated
+StreamExecutionEnvironment	public void addDefaultKryoSerializer(java.lang.Class<?>, java.lang.Class<? extends com.esotericsoftware.kryo.Serializer<?>>);	 @Deprecated
+StreamExecutionEnvironment	public <T extends com.esotericsoftware.kryo.Serializer<?> & java.io.Serializable> void registerTypeWithKryoSerializer(java.lang.Class<?>, T);	 @Deprecated
+StreamExecutionEnvironment	public void registerTypeWithKryoSerializer(java.lang.Class<?>, java.lang.Class<? extends com.esotericsoftware.kryo.Serializer>);	 @Deprecated
+StreamExecutionEnvironment	public void registerType(java.lang.Class<?>);	 @Deprecated
+StreamExecutionEnvironment	public void setStreamTimeCharacteristic(TimeCharacteristic);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public TimeCharacteristic getStreamTimeCharacteristic();	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public void configure(ReadableConfig);	@PublicEvolving
+StreamExecutionEnvironment	public void configure(ReadableConfig, java.lang.ClassLoader);	@PublicEvolving
+StreamExecutionEnvironment	public DataStreamSource<java.lang.Long> generateSequence(long, long);	 @Deprecated
+StreamExecutionEnvironment	public final <OUT extends java.lang.Object> DataStreamSource<OUT> fromElements(OUT...);	 @Deprecated
+StreamExecutionEnvironment	public final <OUT extends java.lang.Object> DataStreamSource<OUT> fromElements(java.lang.Class<OUT>, OUT...);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> fromCollection(java.util.Collection<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> fromCollection(java.util.Collection<OUT>, TypeInformation<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> fromCollection(java.util.Iterator<OUT>, java.lang.Class<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> fromCollection(java.util.Iterator<OUT>, TypeInformation<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> readTextFile(java.lang.String);	 @Deprecated
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> readTextFile(java.lang.String, java.lang.String);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> readFile(FileInputFormat<OUT>, java.lang.String);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> readFile(FileInputFormat<OUT>, java.lang.String, FileProcessingMode, long, FilePathFilter);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> readFile(FileInputFormat<OUT>, java.lang.String, FileProcessingMode, long);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public DataStream<java.lang.String> readFileStream(java.lang.String, long, FileMonitoringFunction$WatchType);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> readFile(FileInputFormat<OUT>, java.lang.String, FileProcessingMode, long, TypeInformation<OUT>);	@PublicEvolving @Deprecated
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> socketTextStream(java.lang.String, int, char, long);	 @Deprecated
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> socketTextStream(java.lang.String, int, java.lang.String, long);	@PublicEvolving
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> socketTextStream(java.lang.String, int, char);	 @Deprecated
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> socketTextStream(java.lang.String, int, java.lang.String);	@PublicEvolving
+StreamExecutionEnvironment	public DataStreamSource<java.lang.String> socketTextStream(java.lang.String, int);	@PublicEvolving
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> createInput(InputFormat<OUT, ?>);	@PublicEvolving
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> createInput(InputFormat<OUT, ?>, TypeInformation<OUT>);	@PublicEvolving
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> addSource(SourceFunction<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> addSource(SourceFunction<OUT>, java.lang.String);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> addSource(SourceFunction<OUT>, TypeInformation<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> addSource(SourceFunction<OUT>, java.lang.String, TypeInformation<OUT>);	 @Deprecated
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> fromSource(Source<OUT, ?, ?>, WatermarkStrategy<OUT>, java.lang.String);	@PublicEvolving
+StreamExecutionEnvironment	public <OUT extends java.lang.Object> DataStreamSource<OUT> fromSource(Source<OUT, ?, ?>, WatermarkStrategy<OUT>, java.lang.String, TypeInformation<OUT>);	@Experimental
+StreamExecutionEnvironment	public JobExecutionResult execute(StreamGraph) throws java.lang.Exception;	@Internal
+StreamExecutionEnvironment	public void registerJobListener(JobListener);	@PublicEvolving
+StreamExecutionEnvironment	public void clearJobListeners();	@PublicEvolving
+StreamExecutionEnvironment	public final JobClient executeAsync() throws java.lang.Exception;	@PublicEvolving
+StreamExecutionEnvironment	public JobClient executeAsync(java.lang.String) throws java.lang.Exception;	@PublicEvolving
+StreamExecutionEnvironment	public JobClient executeAsync(StreamGraph) throws java.lang.Exception;	@Internal
+StreamExecutionEnvironment	public StreamGraph getStreamGraph();	@Internal
+StreamExecutionEnvironment	public StreamGraph getStreamGraph(boolean);	@Internal
+StreamExecutionEnvironment	public StreamGraph generateStreamGraph(java.util.List<Transformation<?>>);	@Internal
+StreamExecutionEnvironment	public <F extends java.lang.Object> F clean(F);	@Internal
+StreamExecutionEnvironment	public void addOperator(Transformation<?>);	@Internal
+StreamExecutionEnvironment	public ReadableConfig getConfiguration();	@Internal
+StreamExecutionEnvironment	public static StreamExecutionEnvironment createLocalEnvironmentWithWebUI(Configuration);	@PublicEvolving
+StreamExecutionEnvironment	public static int getDefaultLocalParallelism();	@PublicEvolving
+StreamExecutionEnvironment	public static void setDefaultLocalParallelism(int);	@PublicEvolving
+StreamExecutionEnvironment	public static boolean areExplicitEnvironmentsAllowed();	@Internal
+StreamExecutionEnvironment	public java.util.List<Transformation<?>> getTransformations();	@Internal
+StreamExecutionEnvironment	public <T extends java.lang.Object> void registerCacheTransformation(AbstractID, CacheTransformation<T>);	@Internal
+StreamExecutionEnvironment	public void invalidateClusterDataset(AbstractID) throws java.lang.Exception;	@Internal
+TypeInformation	public abstract boolean isBasicType();	@PublicEvolving
+TypeInformation	public abstract boolean isTupleType();	@PublicEvolving
+TypeInformation	public abstract int getArity();	@PublicEvolving
+TypeInformation	public abstract int getTotalFields();	@PublicEvolving
+TypeInformation	public abstract java.lang.Class<T> getTypeClass();	@PublicEvolving
+TypeInformation	public java.util.Map<java.lang.String, TypeInformation<?>> getGenericParameters();	@PublicEvolving
+TypeInformation	public abstract boolean isKeyType();	@PublicEvolving
+TypeInformation	public boolean isSortKeyType();	@PublicEvolving
+TypeInformation	public TypeSerializer<T> createSerializer(SerializerConfig);	@PublicEvolving
+TypeInformation	public abstract TypeSerializer<T> createSerializer(ExecutionConfig);	@PublicEvolving @Deprecated
+TypeInformation	public static <T extends java.lang.Object> TypeInformation<T> of(TypeHint<T>);	@Public
