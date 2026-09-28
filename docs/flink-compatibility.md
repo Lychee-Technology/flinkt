@@ -190,7 +190,7 @@ FlinktKeyedStream<T, K>
 
 This design produces better Kotlin source code, but it couples Flinkt more tightly to Flink's class hierarchy than a library of extension functions alone would be. The façade must therefore live in the version-specific Flink integration layer.
 
-When Flink changes constructors, abstract methods, return types, generic bounds, fluent configuration methods, the class hierarchy, or the state kept on stream objects, the corresponding adapter must be recompiled and reviewed. Application code should not need to know which internal façade implementation is active.
+When Flink changes constructors, abstract methods, `final` modifiers, return types, generic bounds, fluent configuration methods, the stream-returning methods, the class hierarchy, or the state kept on stream objects, the corresponding adapter must be recompiled and reviewed. Application code should not need to know which internal façade implementation is active.
 
 ### State on stream objects
 
@@ -207,6 +207,32 @@ Flink keeps some configuration on its stream objects rather than on their `Trans
 A `KeyedStream`'s `PartitionTransformation` behaves the same way. Its public constructors always create a new one, and only the package-private `@Internal` constructor accepts an existing one.
 
 New Flink minor lines can add fields here, as 2.0 added `isEnableAsyncState`. Adopting a line includes checking this table against its sources, and the adapter's [adapter contract tests](testing.md#flink-adapter-contract) cover every field listed for its line.
+
+### Façade exits
+
+A Flink method that the façade doesn't override returns Flink's own type, and the chain [leaves the façade](../README.md#where-the-façade-ends) there. Checked against the Flink sources of the target lines, `DataStream.union` is the only `final` method on `DataStream`, `SingleOutputStreamOperator`, and `KeyedStream` in 1.20, 2.2, and 2.3. It is therefore the only exit the subtype design forces.
+
+The other exits follow from which types the façade wraps. These methods return types it doesn't wrap:
+
+| Class | Methods | Returns | Lines |
+|---|---|---|---|
+| `DataStream` | `connect` | `ConnectedStreams`, `BroadcastConnectedStream` | 1.20, 2.2, 2.3 |
+| `DataStream` | `join`, `coGroup` | `JoinedStreams`, `CoGroupedStreams` | 1.20, 2.2, 2.3 |
+| `DataStream` | `windowAll`, `countWindowAll` | `AllWindowedStream` | 1.20, 2.2, 2.3 |
+| `DataStream` | `timeWindowAll` | `AllWindowedStream` | 1.20 |
+| `DataStream` | `broadcast(MapStateDescriptor...)` | `BroadcastStream` | 1.20, 2.2, 2.3 |
+| `DataStream` | `iterate` | `IterativeStream` | 1.20 |
+| `DataStream`, `KeyedStream` | `fullWindowPartition` | `PartitionWindowedStream` | 1.20, 2.2, 2.3 |
+| `SingleOutputStreamOperator` | `getSideOutput` | `SideOutputDataStream` | 1.20, 2.2, 2.3 |
+| `SingleOutputStreamOperator` | `cache` | `CachedDataStream` | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `window`, `countWindow` | `WindowedStream` | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `timeWindow` | `WindowedStream` | 1.20 |
+| `KeyedStream` | `intervalJoin` | `IntervalJoin` | 1.20, 2.2, 2.3 |
+| `KeyedStream` | `asQueryableState` | `QueryableStateStream` | 1.20, 2.2, 2.3 |
+
+`SideOutputDataStream` holds no state beyond the environment and the transformation, like the plain `DataStream` that `union` returns, so both re-enter the façade exactly. Flink's operators that take a function object and produce a new element type, such as `process(ProcessFunction)`, aren't in either table: whether they stay in the façade is open ([#3](https://github.com/Lychee-Technology/flinkt/issues/3)).
+
+The [exit inventory](testing.md#where-the-façade-ends) in each adapter's tests checks this list against the Flink classes the adapter compiles against. A new minor line that adds a stream-returning method fails that check until the method is either overridden or added here.
 
 ## Preserve fluent chains
 
@@ -407,6 +433,7 @@ DataStream hierarchy
 SingleOutputStreamOperator fluent API
 KeyedStream
 state kept on stream objects
+façade exits
 TypeInformation
 TypeSerializer
 TypeSerializerSnapshot

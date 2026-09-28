@@ -197,6 +197,22 @@ stream
 
 Compile contracts should verify the return type after relevant fluent methods. This suite must run against every supported Flink minor adapter because method signatures and return types are a direct Flink-version dependency.
 
+### Where the façade ends
+
+Some calls [leave the façade](../README.md#where-the-façade-ends), such as `union`, which Flink declares `final`. Each exit gets a compile contract that pins the exact static type Flink returns, and shows that the result re-enters:
+
+```kotlin
+val merged = events.union(replayedEvents)
+expectType<DataStream<Event>>(merged)   // exact type: Flink's, not the façade's
+
+val users = merged.flinkt().map { User(it.id, it.name) }
+expectType<FlinktSingleOutputStreamOperator<User>>(users)
+```
+
+The first assertion checks the exact type, because a `FlinktDataStream<Event>` would also pass as a `DataStream<Event>`. If a later change lets `union` keep the façade, the test fails, and the list of exits changes with it.
+
+Compile contracts cover only the calls someone wrote a test for, and a new Flink minor line can add methods. Each adapter therefore also runs an inventory of the public methods on Flink's `DataStream`, `SingleOutputStreamOperator`, and `KeyedStream` that return a stream or an intermediate stream type such as `ConnectedStreams`. Sinks end a chain, so they're excluded. Every listed method must either be overridden by the façade with a façade return type or be on that line's [exit list](flink-compatibility.md#façade-exits). A method that is neither fails the test, so an upgrade can't add an exit silently. The inventory belongs to the façade retention tests and runs wherever they run.
+
 ### Adapting existing streams
 
 [Adapting Flink stream objects](../README.md#adapting-flink-stream-objects) promises two things that must fail at compile time, so both need negative compile tests:
@@ -383,12 +399,12 @@ tests should include equal and differing values at each key position. Comparator
 
 Compile contracts show which static type a call returns. They can't show that the returned object behaves like the Flink object it stands for. Entering the façade builds new objects over Flink's transformations, and Flink keeps some configuration on the stream objects themselves ([State on stream objects](flink-compatibility.md#state-on-stream-objects)). A façade can therefore pass every compile contract and still change the job. These tests run against each adapter's real Flink classes. They only need to build the stream graph, not run it, so no MiniCluster is required.
 
-**Same graph as plain Flink.** Build a pipeline once through the façade and once with the Flink calls it stands for, passing the same `TypeInformation` explicitly so that the comparison checks structure rather than type inference. The generated stream graphs must match in nodes, edges, partitioners, parallelism, max parallelism, UIDs, and names. Compare structure, not generated IDs, since those come from a global counter. Cover entry through `env.flinkt()` and `stream.flinkt()`, the first-milestone chain, and a keyed pipeline.
+**Same graph as plain Flink.** Build a pipeline once through the façade and once with the Flink calls it stands for. Pass the plain calls, explicitly, the `TypeInformation` the façade should produce, so that Flink's own type inference plays no part. The generated stream graphs must match in nodes, edges, partitioners, output types, parallelism, max parallelism, UIDs, and names. A façade operator that let Flink infer its type therefore fails the comparison. Compare structure, not generated IDs, since those come from a global counter. Cover entry through `env.flinkt()` and `stream.flinkt()`, re-entry after `union`, the first-milestone chain, and a keyed pipeline.
 
 **Flink still acts on per-object state.** Every field listed for the adapter's line needs a case showing that Flink still acts on it through the façade. For example:
 
 ```text
-façade windowAll result, then setParallelism(2)         → rejected, as in Flink
+façade operator, forceNonParallel(), setParallelism(2)   → rejected, as in Flink
 façade operator, one side-output ID with two types       → rejected, as in Flink
 façade keyBy, enableAsyncState(), then façade process    → async state enabled on the operator
 ```
@@ -823,7 +839,7 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 **Compile tests:** Does the test prove which Kotlin overload is selected, or merely that some overload compiles? Where the design promises a compile error, does a negative compile test check it, or only a runtime rejection?
 
-**Façade behavior:** Would the test fail if entering the façade added a transformation or dropped state that Flink keeps on the stream object?
+**Façade behavior:** Would the test fail if entering the façade added a transformation or dropped state that Flink keeps on the stream object? Would it fail if a call left the façade without being a listed exit?
 
 **Type fallback:** Would the test fail if a generated type silently became generic/Kryo-serialized?
 

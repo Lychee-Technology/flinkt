@@ -180,7 +180,7 @@ val env =
         .flinkt()
 ```
 
-Streams created through that environment can remain Flinkt-aware:
+Streams created through that environment stay Flinkt-aware until a call [leaves the façade](#where-the-façade-ends):
 
 ```kotlin
 val users =
@@ -233,7 +233,7 @@ val users =
         .map { toUser(it) }
 ```
 
-The façade's own operators wrap Flink objects too. The façade's `map` calls Flink's `map` and wraps the returned operator in a `FlinktSingleOutputStreamOperator`. Nothing else holds Flink's object, so no second reference can disagree, but the wrapper must start with the state Flink left on it. For example, Flink returns `windowAll` results already forced non-parallel. The façade's `keyBy` doesn't wrap anything. It builds its `FlinktKeyedStream` with the same public constructor that Flink's own `keyBy` uses, so it adds exactly one partitioning step.
+The façade's own operators wrap Flink objects too. The façade's `map` calls Flink's `map` and wraps the returned operator in a `FlinktSingleOutputStreamOperator`. Nothing else holds Flink's object, so no second reference can disagree, but the wrapper must start with the state Flink left on it. Flink does leave such state: it returns `windowAll` results already forced non-parallel. `windowAll` is an [exit](#where-the-façade-ends), so those results reach the façade only through `.flinkt()`, and the operator stays configured through Flink's own object. The façade's `keyBy` doesn't wrap anything. It builds its `FlinktKeyedStream` with the same public constructor that Flink's own `keyBy` uses, so it adds exactly one partitioning step.
 
 ### Preserve fluent chains
 
@@ -253,6 +253,33 @@ do not fall back to a plain Java `SingleOutputStreamOperator` halfway through th
 Relevant fluent configuration methods therefore need covariant return types in the façade.
 
 This creates maintenance work whenever Flink changes its fluent API. The cost is deliberate, and preferable to renamed operators throughout application code.
+
+### Where the façade ends
+
+A chain stays in the façade only while each call returns a façade type. A call that returns a plain Flink type is an exit. The operators after it are Flink's own, and Flink infers their result types with its `TypeExtractor` unless the caller passes a `TypeInformation`.
+
+Two kinds of call are exits:
+
+- **`union`.** Flink declares it `final`, which `@SafeVarargs` requires of a public method, so no subtype can override it. It returns a newly built plain `DataStream<T>`. This is true in every target line.
+- **Calls that return a type the façade doesn't wrap.** The façade wraps `DataStream`, `SingleOutputStreamOperator`, and `KeyedStream`, so `connect`, `join`, `windowAll`, `window`, and `getSideOutput` all leave it.
+
+[Façade exits](docs/flink-compatibility.md#façade-exits) lists the exits for each target line. After an exit, the chain re-enters explicitly:
+
+```kotlin
+val users =
+    events
+        .union(replayedEvents)  // DataStream<Event>, Flink's own type
+        .flinkt()               // FlinktDataStream<Event>
+        .map { User(id = it.id, name = it.name) }
+```
+
+Re-entering after `union` is exact. Flink requires every input of `union` to have the same `TypeInformation`, so the element type is still the one the façade gave the inputs. The plain `DataStream` that `union` returns holds only the environment and the transformation.
+
+Flinkt can't turn an exit into a compile error. Without `.flinkt()`, `events.union(replayedEvents).map { User(...) }` still compiles, because Flink's own `map` accepts the lambda. Flink then infers `User` with its `TypeExtractor`, which [the compatibility policy](docs/flink-compatibility.md#do-not-build-correctness-around-typeextractor) rules out as a foundation. Depending on how the lambda compiles, Flink either can't determine the type at all or treats `User` as a generic type and serializes it with Kryo. `User` has no no-argument constructor, so it isn't a Flink POJO. Setting Flink's `pipeline.generic-types` to `false` turns that fallback into an error when the job graph is built. Flinkt doesn't set it, because entering the façade changes nothing Flink sees.
+
+Exits are part of the API and are tested like the rest of it. [Compile contracts](docs/testing.md#where-the-façade-ends) pin each exit's return type. A per-adapter inventory fails when a Flink line adds a stream-returning method that the façade neither overrides nor lists as an exit.
+
+One case is still open. Flink operators that take a function object and produce a new element type, such as `process(SessionFunction())` in the first example on this page, aren't forced exits, because the façade can override them. An override can't have a reified type parameter, though, so `typeInfo<R>()` can't supply their result type. [#3](https://github.com/Lychee-Technology/flinkt/issues/3) tracks whether they stay in the façade and where their result type comes from.
 
 ---
 
@@ -779,7 +806,7 @@ Review should focus on the boundaries where Kotlin convenience can accidentally 
 
 **API resolution:** Does `stream.map { ... }` select the intended Kotlin overload? Can the underlying Flink overload still be used deliberately?
 
-**Façade preservation:** Do `name`, `uid`, `setParallelism`, and related calls keep the stream in the Flinkt type hierarchy?
+**Façade preservation:** Do `name`, `uid`, `setParallelism`, and related calls keep the stream in the Flinkt type hierarchy? Where a call leaves it, is the call a listed exit?
 
 **Adaptation:** Does entering the façade, or wrapping a stream Flink returned, keep the same transformation and all the state Flink holds on the original object? Where it can't, does it fail explicitly, and at compile time when the static type already shows it?
 
