@@ -89,7 +89,7 @@ These rules keep the [user-facing promises](../README.md#flinkt-streams) true:
 1. **A view never constructs a Flink stream object.** It holds the object it was given or the one a Flink call returned. Nothing else in Flinkt holds Flink's per-object state, so there's nothing to copy or keep in sync. `.flinkt()` reads nothing from the stream, not even its type: `Transformation.getOutputType()` marks the type as used, and a later `returns()` on the original would then throw.
 2. **A view method makes one call to the Flink method of the same name on the held object, and wraps the object that call returns.** Flink's validation, partitioning and operator selection apply unchanged. A fluent method wraps what Flink returned instead of assuming Flink returned `this`.
 3. **A method that introduces an element type is `inline` with a reified type parameter, and it takes Flink's own function type.** A Kotlin lambda converts to that type, and a function object passes through unchanged, so both get their result type from the static type at the call site. Each such method has a non-inline overload that takes the `TypeInformation` explicitly, for generic code where the type isn't known.
-4. **The adapter calls only `@Public` and `@PublicEvolving` Flink methods** ([dependency policy](flink-compatibility.md#dependency-policy-for-flink-apis)). Where Flink's explicit-type overload is `@Internal`, as `process(fn, TypeInformation)` is on every target line, the view calls the one-argument method and then `returns(TypeInformation)`. Flink's `process(fn)` runs its `TypeExtractor` with missing types allowed, and `returns()` replaces the result before anything reads it.
+4. **Hand-written adapter code calls only `@Public` and `@PublicEvolving` Flink methods**, apart from `@Experimental` exceptions that the [dependency policy](flink-compatibility.md#dependency-policy-for-flink-apis) lists. Where Flink's explicit-type overload is `@Internal`, as `process(fn, TypeInformation)` is on every target line, the view calls the one-argument method and then `returns(TypeInformation)`. Flink's `process(fn)` runs its `TypeExtractor` with missing types allowed, and `returns()` replaces the result before anything reads it. Generated forwarders carry the status Flink declares instead: they refuse `@Internal` and put `@Experimental` behind an opt-in ([Generated forwarders](#generated-forwarders)).
 
 A view offers two kinds of Flink methods:
 
@@ -156,6 +156,8 @@ Generated forwarders have no KDoc in the first version. Whether to add it later,
 
 A signature that Flink adds to a listed name still reaches Flinkt's public API without anyone choosing it. The checked-in API dump of each adapter, and the cross-adapter comparison, make that visible in review ([testing.md](testing.md#generated-forwarders)).
 
+A change in a listed method's stability status reaches Flinkt's API the same way. A method that becomes `@Experimental` or deprecated is still forwarded, now with the opt-in marker or `@Deprecated`. Its JVM signature doesn't change, so the API dump doesn't show it. The cross-adapter comparison does, because it compares the annotations the generator adds and fails until a status that differs between lines is listed. Only a change to `@Internal` fails generation.
+
 The generator checks the stability annotations of the methods it forwards. Flink 1.20's annotations have class retention, and KSP reads them from bytecode, so the check works on every line. The Flink methods that hand-written view code calls are covered by a [separate test](testing.md#flink-adapter-contract).
 
 Evidence: the [view-codegen spike](https://github.com/Lychee-Technology/flinkt/tree/4cccdc5ec6438d2f76e6598b0373fd2b1f563471/spikes/architecture-reset/view-codegen) ran against 2.3.0 and 1.20.5:
@@ -205,7 +207,7 @@ These are decided with the serializer implementation, because each one fixes a p
 
 These are sequencing questions that don't affect the architecture:
 
-- **Views after the first slice.** Which Flink types get views next: windows, `connect`, broadcast, joins.
+- **Views after the first slice.** Which Flink types get views next: windows, `connect`, broadcast, joins. Which type-introducing methods of the existing views get hand-written versions, such as `getSideOutput`. The generator refuses these, so until then they're reached through `asFlink()`.
 - **Typed sources.** Whether typed-source helpers are worth adding, given that Flink's typed `fromSource` is `@Experimental`.
 - **Overload selection.** Letting a view forward one overload of a name, which `broadcast()` needs.
 - **KDoc for generated forwarders.** The first version has none. One option is to link each forwarder to the Flink method it calls, with Dokka external links to the Javadoc Flink publishes for each line. The other is to copy Flink's Javadoc text. Copying adds attribution obligations, because that text is under the Apache License 2.0 with a NOTICE file and Flinkt is MIT-licensed. A copy also describes the Java method's return type rather than the view's.

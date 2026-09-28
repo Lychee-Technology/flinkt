@@ -244,7 +244,7 @@ Most view methods only forward, and they are [generated](architecture.md#generat
 - **Flink's stability status reaches Kotlin callers.** A Kotlin call to the forwarder of a deprecated Flink method must compile with a deprecation warning, as a Java call to Flink's method does. A call to the forwarder of an `@Experimental` method must warn without `@OptIn(ExperimentalFlinkApi::class)` and compile cleanly with it. An overload that only uses a deprecated type must be forwarded without an annotation.
 - **Parameter names are Flink's.** The extraction script reads names and descriptors from the class files the adapter compiles against. It must fail when a public method has no parameter names, which would mean Flink stopped compiling with debug information. The generator must fail the build when a forwarded method has no entry in the names file, and when the file records a different Flink version than the one on the classpath. A varargs method, such as `union`, must be found; KSP's own descriptor for it lacks the array marker. The names file must be a tracked input of the generation task, so that a changed file regenerates the forwarders.
 - **The generated API is reviewed like hand-written API.** Each adapter checks in the dump of its public API, generated members included, and the build fails when the dump doesn't match. When a Flink upgrade changes the overloads of a listed method, the change appears as a diff in the upgrade's pull request instead of shipping unnoticed. The dump records JVM signatures, which don't include parameter names; name changes appear in the diff of the checked-in names file.
-- **Adapters agree.** A test compares the generated members of every adapter. Members for methods that exist on all lines must be identical, and anything else must be a listed per-line difference. On 1.20 today, those are the deprecated `partitionCustom`, `assignTimestampsAndWatermarks` and legacy `sinkTo` overloads.
+- **Adapters agree.** A test compares the generated members of every adapter. Members for methods that exist on all lines must be identical, including their parameter names and the `@Deprecated` and `@ExperimentalFlinkApi` annotations the generator adds. Anything else must be a listed per-line difference. So a method that is `@Experimental` or deprecated on one line and not on another fails the test until the difference is listed, even though generation passes. On 1.20 today, those are the deprecated `partitionCustom`, `assignTimestampsAndWatermarks` and legacy `sinkTo` overloads.
 
 Forwarded calls don't need a test each. The generator guarantees their shape: one call on `asFlink()`, and a returned stream wrapped in its view. The [adapter contract](#flink-adapter-contract) checks their behavior on a sample that includes `union`, a sink, and a fluent call after `forceNonParallel()`.
 
@@ -448,24 +448,28 @@ A view operator that let Flink infer its type fails the comparison, and so does 
 - the first-milestone chain;
 - `process` on a keyed stream;
 - `union`;
-- a side output;
+- a side output, taken with `asFlink().getSideOutput(tag)` and entered with `.flinkt()`;
 - a sink added with the view's `sinkTo`;
 - `DataStreamUtils.reinterpretAsKeyedStream`, whose forward partitioning an extra keyed step would replace.
 
-**Entering and leaving change nothing.** For each type that can enter, `x.flinkt().asFlink()` must be `x`, and the environment's transformations must be the same before and after entering.
+**Entering and leaving change nothing.** For each type that can enter, including a side output, `x.flinkt().asFlink()` must be `x`, and the environment's transformations must be the same before and after entering.
 
-**Flink still acts on per-object state.** Every field listed in [State on stream objects](flink-compatibility.md#state-on-stream-objects) for the adapter's line gets a case showing that a call through the view gives the same outcome as the call on the Flink object:
+**Flink still acts on per-object state.** Every field listed in [State on stream objects](flink-compatibility.md#state-on-stream-objects) for the adapter's line gets a case. Where a view method sets or reads the field, the case makes that call through the view and shows the outcome of the same call on the Flink object. Where no view method touches the field, the case sets it on the Flink object before entering and shows that Flink still acts on it after a fluent call through the view:
 
 ```text
-forceNonParallel(), then setParallelism(2) or setMaxParallelism(2) through the view → rejected, as in Flink
-side-output ID requested through the view, then with another type → rejected, as in Flink
-non-parallel source, setParallelism(2) through the view           → rejected, as in Flink
-2.x: enableAsyncState(), then process through the view            → asynchronous keyed operator, as in Flink
+forceNonParallel(), then setParallelism(2) or setMaxParallelism(2) through the view  → rejected, as in Flink
+side output requested on the operator, then its ID with another type
+  after .flinkt().name(…).asFlink()                                                  → rejected, as in Flink
+keyed stream from reinterpretAsKeyedStream, then process through the view            → keyed operator with the stream's key selector and key type, as in Flink
+non-parallel source, setParallelism(2) through the view                              → rejected, as in Flink
+2.x: enableAsyncState(), then process through the view                               → asynchronous keyed operator, as in Flink
 ```
+
+The side-output case requests both side outputs on the Flink object, because no view offers `getSideOutput` in the first slice. Once a view offers it, both requests go through the view.
 
 Views never copy these fields, so the cases pass by construction. They stay as regression tests against adapter code that builds its own Flink objects.
 
-**No `@Internal` Flink methods.** The generator checks the methods it forwards. For the Flink methods that hand-written view code calls, such as `map(fn, TypeInformation)`, `keyBy`, `process(fn)` and `returns`, a test lists them and fails if one is annotated `@Internal` on the adapter's line. The test reads the annotations by reflection on 2.x and from bytecode on 1.20, where they have class retention. An `@Experimental` method must match a documented exception in the [dependency policy](flink-compatibility.md#dependency-policy-for-flink-apis).
+**No `@Internal` calls, and no unlisted `@Experimental` ones.** The generator checks the methods it forwards. For the Flink methods that hand-written view code calls, such as `map(fn, TypeInformation)`, `keyBy`, `process(fn)` and `returns`, a test lists them and fails if one is annotated `@Internal` on the adapter's line. It also fails if one is `@Experimental` and the [dependency policy](flink-compatibility.md#experimental) doesn't list the call as an exception. The test reads the annotations by reflection on 2.x and from bytecode on 1.20, where they have class retention.
 
 These tests run on every adapter lane, because the Flink classes differ between lines.
 

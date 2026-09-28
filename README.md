@@ -183,7 +183,7 @@ Nullability comes through the same way. A lambda that returns `User?` produces a
 
 ### Leaving the view
 
-Only the methods a view offers are Flinkt's. For anything else, such as `connect`, windows, joins, broadcast state, or a library that takes a `DataStream`, call `asFlink()`. From that point on, Flink's rules apply, including its own type inference. Pass `typeInfo<R>()` wherever Flink accepts a `TypeInformation`, and re-enter with `.flinkt()`:
+Only the methods a view offers are Flinkt's. For anything else, such as `connect`, windows, joins, broadcast state, side outputs, or a library that takes a `DataStream`, call `asFlink()`. From that point on, Flink's rules apply, including its own type inference. Pass `typeInfo<R>()` wherever Flink accepts a `TypeInformation`, and re-enter with `.flinkt()`:
 
 ```kotlin
 val counts =
