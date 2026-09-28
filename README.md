@@ -156,7 +156,7 @@ stream
     .filter { it.valid }
 ```
 
-These forwarding methods are generated from Flink's own classes when Flinkt is built for each Flink line. The generator refuses any method that would break the rules on this page ([Generated forwarders](docs/architecture.md#generated-forwarders)).
+These forwarding methods are generated from Flink's own classes when Flinkt is built for each Flink line. They keep Flink's overloads and parameter names. A method Flink deprecates stays deprecated, and a method Flink marks `@Experimental` needs `@OptIn(ExperimentalFlinkApi::class)`. The generator refuses any method that would break the rules on this page ([Generated forwarders](docs/architecture.md#generated-forwarders)).
 
 ### Where result types come from
 

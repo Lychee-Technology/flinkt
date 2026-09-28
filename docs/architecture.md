@@ -27,7 +27,7 @@ The first version of this design, in PR #1, made each Flinkt stream a subclass o
 - **Which object owns a stream's Flink state?** A subtype can't *be* the object Flink created, so it has to build a second one, on entry and around every object a Flink call returns. Flink keeps some state on stream objects rather than on their transformations: a keyed stream's partitioning, `forceNonParallel()`, requested side outputs, async state in 2.x, and a source's parallelism. A second object doesn't have that state.
 - **Which calls are Flinkt's?** A subtype inherits every Flink method under the same name. Whether a call gets Kotlin types then depends on details the user can't see at the call site: lambda versus function object, `final` versus overridable, whether an override exists, and whether an override could be reified at all.
 
-The following were executed against Flink 1.20.5, 2.2.1 and 2.3.0 with Kotlin 2.4.20 ([spike](https://github.com/Lychee-Technology/flinkt/tree/dd2d0f18f6d683107c5ff289c2e6d8bf93d17029/spikes/architecture-reset)):
+The following were executed against Flink 1.20.5, 2.2.1 and 2.3.0 with Kotlin 2.4.20 ([spike](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset)):
 
 - **Rebuilt objects lost state.** A subtype rebuilt over a configured operator accepted `setParallelism(2)` after `forceNonParallel()`. A rebuilt keyed stream added a hash shuffle after `reinterpretAsKeyedStream`, and on 2.x it dropped `enableAsyncState()`.
 - **Inherited calls fell back to Kryo.** `map(MapFunction { … })` and `map(ToUser())` on the subtype resolved to Flink's inherited `map`, and Flink typed the result `GenericType<User>`, which is Kryo.
@@ -54,7 +54,7 @@ Each module exists because it has a different dependency or release profile:
 |---|---|---|
 | `flinkt-core` | Kotlin stdlib | `@FlinkType`, the schema and type model, the generated-codec SPI (`GeneratedCodec`, `GeneratedTypeModule`), and resolution from `KType` to the type model. Model modules and generated code depend on it, and it doesn't change when Flink does. |
 | `flinkt-ksp` | KSP API | Build time only. It must never reach a runtime classpath. |
-| `flinkt-view-codegen` | KSP API | A KSP processor that runs only in Flinkt's own build. It generates each adapter's [forwarders](#generated-forwarders) from that line's Flink classes. It isn't published, and users never run it. |
+| `flinkt-view-codegen` | KSP API; JavaParser for the extraction script | A KSP processor that runs only in Flinkt's own build. It generates each adapter's [forwarders](#generated-forwarders) from that line's Flink classes, with the parameter names that a script in the same module extracts from Flink's sources. It isn't published, and users never run it. |
 | `flinkt-flink23`, `flinkt-flink22`, `flinkt-flink120` | `flinkt-core`; Flink as `compileOnly` | One per Flink minor line, each owning its views, `typeInfo<T>()`, `TypeInformation`/`TypeSerializer`/`TypeSerializerSnapshot` for generated types, state helpers, and the runtime version guard. |
 
 The adapters are built from one shared source set, compiled against each line, plus small per-line source sets for real differences ([Differences between target lines](flink-compatibility.md#differences-between-target-lines)). A test kit becomes a published module only when something outside this repository needs it. Table integration gets its own per-line modules when it's built.
@@ -118,27 +118,57 @@ public open class FlinktDataStream<T> @PublishedApi internal constructor(
 
 When Flinkt builds an adapter, `flinkt-view-codegen` reads the listed methods from that line's Flink classes on the compile classpath and generates a `sealed interface FlinktDataStreamForwarders<T>`. The view implements it, so the forwarded methods are members, and users need no imports. Each generated method follows rule 2: it calls the Flink method on `asFlink()` and wraps a returned stream in its view. A parameter that takes a Flink stream with a view takes the view, including varargs, so `union` accepts views. A Java collection comes back as the read-only Kotlin type.
 
-The generator rejects anything that would break a view rule, and the build fails with the reason:
+The generator follows one principle: a forwarder carries Flink's API as Flink declares it. That covers overloads, parameter names, and stability status. The generator only refuses what would break a view rule. Where Flinkt is stricter than Flink, the reason is type propagation, not taste.
 
 | The listed method | Result |
 |---|---|
 | doesn't exist on the line being built | build error naming the method and the Flink version |
 | returns a type built from a method type parameter (`map`, `process`, `connect`, `getSideOutput`) | build error: write it by hand with a reified type parameter |
 | returns a Flink stream or builder type that has no view (`BroadcastStream`, `WindowedStream`) | build error: forwarding it would let a chain leave the view without `asFlink()` |
-| is `@Internal` (for example `getTransformation`) | build error |
-| is `@Experimental` (for example 2.x `enableAsyncState`) | build error until the [dependency policy](flink-compatibility.md#dependency-policy-for-flink-apis) documents an exception |
-| has an overload that is deprecated, or whose signature uses a deprecated type | that overload is skipped and recorded in the generator's report |
+| is `@Internal` (for example `getTransformation`) | build error: `@Internal` isn't public API in Java either |
+| is deprecated | forwarded and annotated with Kotlin's `@Deprecated`, so a Kotlin caller gets the warning a Java caller gets |
+| uses a deprecated type in its signature, but isn't deprecated itself (1.20's `sinkTo` for the legacy `Sink`) | forwarded unannotated, as Flink declares it |
+| is `@Experimental` (for example 2.x `enableAsyncState`) | forwarded and annotated with `@ExperimentalFlinkApi`, a Kotlin `@RequiresOptIn` marker at warning level, so a call without `@OptIn` warns |
+
+The opt-in marker implements the [dependency policy](flink-compatibility.md#experimental): functionality built on an experimental Flink API is itself explicitly experimental.
 
 A name is listed once and covers all of its overloads, so each overload has to pass. `broadcast()` returns a stream, but `broadcast(MapStateDescriptor...)` returns `BroadcastStream`, so `broadcast` can't be listed until the generator can select a single overload.
 
-The generator runs against every line's classes. A listed method is therefore checked on every line, and a method that exists on only some lines fails the build on the others. Line-specific methods go in the line's own source set.
+The generator runs against every line's classes. A listed method is therefore checked on every line, and a method that exists on only some lines fails the build on the others. Line-specific methods go in the line's own source set. Deprecated overloads that only one line has are Flink's own difference between lines. They appear as listed per-line differences in the cross-adapter API comparison. In the spike, 1.20 had six such overloads.
 
-Two limitations came out of the spike:
+#### Parameter names
 
-- **Parameter names.** Flink's jars carry no parameter names (they read as `p0`, `p1`), so the generator derives them from the method or parameter type: `name`, `parallelism`, `filterFunction`, `dataStreams`. Kotlin allows named arguments, which makes these names part of the source API. Each adapter's checked-in ABI dump records them, so a change shows up in review.
-- **The API follows Flink's jar.** A method signature that Flink adds to a listed name reaches Flinkt's public API without anyone choosing it. Before the deprecated-type rule, the 1.20 adapter exposed two extra `sinkTo` overloads that take the legacy `connector.sink.Sink`. The checked-in ABI dump and a cross-adapter API comparison catch that kind of drift ([testing.md](testing.md#generated-forwarders)).
+Flink's jars have no `MethodParameters` attribute, so the compiler and KSP see `p0`, `p1`. Kotlin allows named arguments, which makes parameter names part of the source API. They are Flink's own names:
 
-The generator checks the stability annotations of the methods it forwards. Flink 1.20's annotations have class retention, and KSP reads them from bytecode, so the check works on every line. The Flink methods that hand-written view code calls are covered by a [separate test](testing.md#flink-adapter-contract). Evidence: the [view-codegen spike](https://github.com/Lychee-Technology/flinkt/tree/dd2d0f18f6d683107c5ff289c2e6d8bf93d17029/spikes/architecture-reset/view-codegen) generated the same 33 members from 2.3.0 and 1.20.5, compiled them in explicit-API mode, ran a job through them, and failed each negative case with its reason on both lines.
+- **Extraction.** A script in Flinkt's build reads each line's `-sources.jar` from Maven Central with JavaParser. It resolves every parameter type against that line's binary jars and writes one row per public method to a per-adapter `flink-api.tsv`. Each row holds the class, the method, the JVM descriptor, and the parameter names. The file is checked in, and it records the Flink version it came from.
+- **Checking.** The script checks every descriptor against the class files, both ways, and fails on any difference. The check caught two tool errors in the spike. JavaParser, and KSP's `Resolver.mapToJvmSignature`, both omit the array marker of a Java varargs parameter, so for `union` the two tools agreed on the same wrong descriptor. JavaParser also writes a nested type as `Outer/Inner` instead of `Outer$Inner`. The generator applies the same varargs correction on its side.
+- **Lookup.** KSP receives the file as a tracked Gradle input, so editing or regenerating it reruns generation. It looks up each forwarded method by its descriptor. A missing entry, or a file extracted from a different Flink version than the one on the classpath, fails the build.
+
+The result is `executeAndCollect(jobExecutionName, limit)`, `print(sinkIdentifier)`, `reduce(reducer)`, `setBufferTimeout(timeoutMillis)` and `union(vararg streams)`. Adopting a Flink line includes extracting its file, and the file's diff shows every name that changed.
+
+#### Documentation
+
+Each forwarder's KDoc links to the Flink method it calls, for example `[DataStream.sinkTo][org.apache.flink.streaming.api.datastream.DataStream.sinkTo]`, and Flinkt's API docs link to Flink's published Javadoc for the adapter's line. Flink hosts that Javadoc for each release, and Dokka's external links can use it.
+
+Flinkt doesn't copy Flink's Javadoc text into generated code, for three reasons:
+
+- **Licensing.** The text is under the Apache License 2.0 with a NOTICE file, and Flinkt is MIT-licensed. Copying it into the repository and into published sources would add attribution obligations.
+- **Accuracy.** Flink's Javadoc describes the Java method and its return type. A view returns a view.
+- **Freshness.** A copy goes stale when Flink edits its docs, while a link stays with the adapter's line.
+
+#### Drift
+
+A signature that Flink adds to a listed name still reaches Flinkt's public API without anyone choosing it. The checked-in API dump of each adapter, and the cross-adapter comparison, make that visible in review ([testing.md](testing.md#generated-forwarders)).
+
+The generator checks the stability annotations of the methods it forwards. Flink 1.20's annotations have class retention, and KSP reads them from bytecode, so the check works on every line. The Flink methods that hand-written view code calls are covered by a [separate test](testing.md#flink-adapter-contract).
+
+Evidence: the [view-codegen spike](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset/view-codegen) ran against 2.3.0 and 1.20.5:
+
+- it generated the forwarders with Flink's names and compiled them in explicit-API mode;
+- it ran a job through them;
+- it refused each case above with its reason;
+- Kotlin callers got Flink's deprecation and experimental warnings;
+- the names-file checks behaved as described.
 
 ### No environment view
 
@@ -180,4 +210,4 @@ These are sequencing questions that don't affect the architecture:
 
 - **Views after the first slice.** Which Flink types get views next: windows, `connect`, broadcast, joins.
 - **Typed sources.** Whether typed-source helpers are worth adding, given that Flink's typed `fromSource` is `@Experimental`.
-- **Generator refinements.** Selecting a single overload (needed for `broadcast()`), a documented opt-in for `@Experimental` methods, and whether to read real parameter names from Flink's source jars.
+- **Overload selection.** Letting a view forward one overload of a name, which `broadcast()` needs.

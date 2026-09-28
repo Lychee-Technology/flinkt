@@ -238,12 +238,13 @@ Most view methods only forward, and they are [generated](architecture.md#generat
   - a method missing on the line;
   - a type-introducing method (`map`, `connect`);
   - a method returning a type that has no view (`broadcast` with descriptors);
-  - an `@Internal` method (`getTransformation`);
-  - an `@Experimental` method (2.x `enableAsyncState`).
+  - an `@Internal` method (`getTransformation`).
 
-  Also assert that a deprecated overload, or one whose signature uses a deprecated type, is skipped. These tests run on every adapter lane, because each line's classes differ. On 1.20 they also show that the `@Internal` check sees class-retention annotations.
-- **The generated API is reviewed like hand-written API.** Each adapter checks in the dump of its public API, generated members included, and the build fails when the dump doesn't match. When a Flink upgrade changes the overloads of a listed method, the change appears as a diff in the upgrade's pull request instead of shipping unnoticed. In the spike, before the deprecated-type rule, 1.20 exposed two `sinkTo` overloads that 2.3 doesn't have.
-- **Adapters agree.** A test compares the generated members of every adapter. Members for methods that exist on all lines must be identical, and anything else must be a listed per-line difference.
+  These tests run on every adapter lane, because each line's classes differ. On 1.20 they also show that the `@Internal` check sees class-retention annotations.
+- **Flink's stability status reaches Kotlin callers.** A Kotlin call to the forwarder of a deprecated Flink method must compile with a deprecation warning, as a Java call to Flink's method does. A call to the forwarder of an `@Experimental` method must warn without `@OptIn(ExperimentalFlinkApi::class)` and compile cleanly with it. An overload that only uses a deprecated type must be forwarded without an annotation.
+- **Parameter names come from Flink's sources, exactly.** The extraction script fails unless every descriptor it writes matches the class files, both ways. Both JavaParser and KSP get Java varargs descriptors wrong, and JavaParser gets nested types wrong, so this check is what makes a lookup by descriptor trustworthy. The generator must fail the build when a forwarded method has no entry in the names file, and when the file records a different Flink version than the one on the classpath. The names file must be a tracked input of the generation task, so that a changed file regenerates the forwarders.
+- **The generated API is reviewed like hand-written API.** Each adapter checks in the dump of its public API, generated members and their parameter names included, and the build fails when the dump doesn't match. When a Flink upgrade changes the overloads or names of a listed method, the change appears as a diff in the upgrade's pull request instead of shipping unnoticed.
+- **Adapters agree.** A test compares the generated members of every adapter. Members for methods that exist on all lines must be identical, and anything else must be a listed per-line difference. On 1.20 today, those are the deprecated `partitionCustom`, `assignTimestampsAndWatermarks` and legacy `sinkTo` overloads.
 
 Forwarded calls don't need a test each. The generator guarantees their shape: one call on `asFlink()`, and a returned stream wrapped in its view. The [adapter contract](#flink-adapter-contract) checks their behavior on a sample that includes `union`, a sink, and a fluent call after `forceNonParallel()`.
 

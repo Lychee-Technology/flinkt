@@ -164,14 +164,14 @@ The adapters for all target lines are compiled from one shared source set. A per
 
 ### Differences between target lines
 
-Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/dd2d0f18f6d683107c5ff289c2e6d8bf93d17029/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
+Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, and 2.3.0 ([spike](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset)). 2.2 and 2.3 have identical signatures on `DataStream`, `SingleOutputStreamOperator`, `KeyedStream`, `TypeInformation`, `TypeSerializer`, and `TypeSerializerSnapshot`.
 
 | Area | 1.20 | 2.2, 2.3 | Effect on the adapter |
 |---|---|---|---|
 | `TypeInformation` serializer factory | abstract `createSerializer(ExecutionConfig)`; `createSerializer(SerializerConfig)` has a default | abstract `createSerializer(SerializerConfig)` only | per-line base class for Flinkt's `TypeInformation` |
 | `TypeSerializerSnapshot.resolveSchemaCompatibility(snapshot)` | default method | abstract | implemented in both; no per-line code |
 | `enableAsyncState()` | absent | on `KeyedStream` and `SingleOutputStreamOperator`, `@Experimental` | 2.x source set only, if a view offers it |
-| Deprecated stream API | `keyBy(int...)`, `keyBy(String...)`, `timeWindow*`, `iterate`, `SinkFunction` sinks | removed; legacy `SourceFunction`/`SinkFunction` moved to `...legacy` packages | not offered by views |
+| Deprecated stream API | `keyBy(int...)`, `keyBy(String...)`, `timeWindow*`, `iterate`, `SinkFunction` sinks, `partitionCustom` by field, `assignTimestampsAndWatermarks` with the old assigners, `sinkTo` for the legacy `connector.sink.Sink` | removed; legacy `SourceFunction`/`SinkFunction` moved to `...legacy` packages | the overloads of forwarded methods (`partitionCustom`, `assignTimestampsAndWatermarks`, `sinkTo`) are forwarded on 1.20 as Flink declares them, which is a listed per-line difference; the rest aren't view methods |
 
 ### State on stream objects
 
@@ -256,7 +256,11 @@ Apache Flink's API stability annotations decide where, and whether, Flinkt may d
 
 Experimental Flink APIs should not be part of Flinkt's stable public contract. If Flinkt exposes functionality built on an experimental Flink API, that functionality should also be explicitly experimental.
 
-`StreamExecutionEnvironment.fromSource(…, TypeInformation)` is `@Experimental` on every target line, and it's the reason Flinkt has no environment view ([Views](architecture.md#views)). `enableAsyncState()` in 2.x is `@Experimental` too.
+Views follow this rule mechanically. When a view forwards an `@Experimental` Flink method, such as `enableAsyncState()` in the 2.x source set, the generated member carries `@ExperimentalFlinkApi`. That's a Kotlin opt-in marker at warning level, so a call without `@OptIn` warns ([Generated forwarders](architecture.md#generated-forwarders)). `StreamExecutionEnvironment.fromSource(…, TypeInformation)` is `@Experimental` on every target line, and it's the reason Flinkt has no environment view ([Views](architecture.md#no-environment-view)).
+
+### Deprecated
+
+A view forwards a deprecated Flink method, and the generated member keeps it deprecated with Kotlin's `@Deprecated`. A Kotlin caller gets the warning that a Java caller of Flink's method gets. Flinkt doesn't remove what Flink still ships.
 
 ### `@Internal`
 
@@ -386,7 +390,7 @@ pass the release-tier suite on the 2.4 lane
 mark 2.4.x Supported target in the matrix
 ```
 
-The process should not assume compatibility merely because existing code compiles. Building the adapter regenerates the view forwarders from the new line's classes, and the diff of the adapter's API dump shows what that changed. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/dd2d0f18f6d683107c5ff289c2e6d8bf93d17029/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
+The process should not assume compatibility merely because existing code compiles. Adopting a line starts by extracting its `flink-api.tsv` from its sources jar ([Parameter names](architecture.md#parameter-names)). Building the adapter then regenerates the view forwarders from the new line's classes. The diffs of the names file and of the adapter's API dump show what changed. The review starts from a diff of the new line's API surface against the previous line: public methods, their stability annotations, and the fields of the stream classes. The [spike inventory](https://github.com/Lychee-Technology/flinkt/tree/aa23eb1d791681cbc976663dd77f3027d2efd4e9/spikes/architecture-reset/inventory) is a working example. Particular attention should go to:
 
 ```text
 Flink methods the views call: existence, signature, stability annotation
