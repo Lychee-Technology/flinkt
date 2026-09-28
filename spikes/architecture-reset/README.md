@@ -16,6 +16,7 @@ Versions: Kotlin 2.4.20 (`kotlinc`, plus `-language-version 2.0` for the negativ
 | `common/spike/state` | `*StateDescriptor<T>()` builds descriptors; `RuntimeContext.*State<T>()` binds state. |
 | `line120/`, `line2x/` | The only per-line source the spike needed: 1.20 still declares `TypeInformation.createSerializer(ExecutionConfig)` abstract. |
 | `probes/` | Resolution and static types, graph and per-object state, MiniCluster run, the `pipeline.generic-types` safety net, exact-type helpers. |
+| `docs-api/` | The first-slice view API with the names and signatures the design documents use, and the README's code compiled against it (`build.sh <line> <out> docs-api/*.kt`). Compiles on all three lines. |
 | `neg/` | Compile probes that must fail (N08 is a probe that compiles; see its comment). |
 | `results/` | Output of `run-all.sh` for every line. |
 
