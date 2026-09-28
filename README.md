@@ -781,7 +781,7 @@ Review should focus on the boundaries where Kotlin convenience can accidentally 
 
 **Façade preservation:** Do `name`, `uid`, `setParallelism`, and related calls keep the stream in the Flinkt type hierarchy?
 
-**Adaptation:** Does entering the façade, or wrapping a stream Flink returned, keep the same transformation and all the state Flink holds on the original object? Where it can't, does it fail explicitly?
+**Adaptation:** Does entering the façade, or wrapping a stream Flink returned, keep the same transformation and all the state Flink holds on the original object? Where it can't, does it fail explicitly, and at compile time when the static type already shows it?
 
 **Type propagation:** Whenever an operator introduces a new generic type, does Flink receive the complete `TypeInformation`, including nested generic arguments and nullability where relevant?
 

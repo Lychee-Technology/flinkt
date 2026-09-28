@@ -197,6 +197,22 @@ stream
 
 Compile contracts should verify the return type after relevant fluent methods. This suite must run against every supported Flink minor adapter because method signatures and return types are a direct Flink-version dependency.
 
+### Adapting existing streams
+
+[Adapting Flink stream objects](../README.md#adapting-flink-stream-objects) promises two things that must fail at compile time, so both need negative compile tests:
+
+```kotlin
+val parsed: SingleOutputStreamOperator<Event> = ...
+parsed.flinkt().setParallelism(4)   // must not compile
+
+val keyed: KeyedStream<Event, Long> = ...
+keyed.flinkt()                      // must not compile
+```
+
+The adapted operator needs a separate case for each of `name`, `uid`, `setParallelism`, and `getSideOutput`, because the README says the adapted value offers none of them.
+
+The runtime check can't stand in for the keyed case. `KeyedStream<T, K>` extends `DataStream<T>`, so a `DataStream<T>.flinkt()` extension also accepts a keyed receiver. An adapter that has only the runtime check would pass every [adapter contract](#flink-adapter-contract) test and still let `keyed.flinkt()` compile. As with the [processor's negative cases](#compile-failures-are-part-of-the-api), the test checks the diagnostic as well as the failure. The diagnostic must name `KeyedStream` and point to the alternatives: the façade's own `keyBy`, or Flink's methods with an explicit `typeInfo<R>()`.
+
 ### Preserve access to native Flink APIs
 
 Improving Kotlin ergonomics must not make established Flink APIs inaccessible. A Flinkt stream should remain directly assignable where Flink expects `DataStream<T>` or the corresponding keyed or operator type. Tests should also cover users who deliberately choose Flink APIs such as `MapFunction`, `KeySelector`, and `ProcessFunction`.
@@ -377,7 +393,7 @@ façade operator, one side-output ID with two types       → rejected, as in Fl
 façade keyBy, enableAsyncState(), then façade process    → async state enabled on the operator
 ```
 
-**Adaptation fails explicitly.** `.flinkt()` must reject a `KeyedStream`, including one typed as `DataStream<T>`, and any `DataStream` subclass the adapter doesn't recognize. The error names the class, and the environment's transformations are unchanged afterwards. A negative compile test checks that the adapted form of a `SingleOutputStreamOperator` doesn't offer `setParallelism` or `getSideOutput`.
+**Adaptation fails explicitly.** `.flinkt()` must reject a `KeyedStream` typed as `DataStream<T>`, and any `DataStream` subclass the adapter doesn't recognize. The error names the class, and the environment's transformations are unchanged afterwards. When the static type shows a `KeyedStream`, the call must fail at compile time instead. That is a [compile contract](#adapting-existing-streams), and passing this runtime check doesn't satisfy it.
 
 These tests run on every adapter lane, because the fields differ between Flink lines.
 
@@ -805,7 +821,7 @@ A helper that turns all compatibility checks into a generic "passes" assertion w
 
 Testing changes deserve review at the boundaries where false confidence is easiest.
 
-**Compile tests:** Does the test prove which Kotlin overload is selected, or merely that some overload compiles?
+**Compile tests:** Does the test prove which Kotlin overload is selected, or merely that some overload compiles? Where the design promises a compile error, does a negative compile test check it, or only a runtime rejection?
 
 **Façade behavior:** Would the test fail if entering the façade added a transformation or dropped state that Flink keeps on the stream object?
 
