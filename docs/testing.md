@@ -36,7 +36,7 @@ Tests should protect a small set of invariants rather than mirror implementation
 3. Supported types do not silently fall back to generic or Kryo serialization.
 4. Generated per-record code does not depend on Kotlin reflection.
 5. Flinkt serializers satisfy Flink's serializer contracts.
-6. Serializer snapshot compatibility results agree with real serialized bytes.
+6. Serializer snapshot compatibility results agree with real serialized bytes, and every migration a snapshot promises is performed by a real restore on each state backend.
 7. On every supported Flink adapter, the views make the same Flink calls as the code they stand for, and entering or leaving a view changes nothing Flink sees.
 8. Persisted state can be restored across every upgrade path Flinkt claims to support.
 9. Flinkt's public Kotlin API does not change accidentally.
@@ -368,6 +368,19 @@ copy(x) does not unexpectedly share mutable nested state
 
 Property tests do not replace compatibility fixtures, because the current implementation normally both writes and reads the bytes.
 
+## Persisted-state evidence
+
+Six kinds of test cover persisted state. Each proves one thing, and none stands in for another:
+
+| Evidence | Proves | Doesn't prove |
+|---|---|---|
+| round-trip correctness | the current serializer reads what it writes | anything about bytes an older declaration or release wrote |
+| golden byte stability | the current format hasn't changed unnoticed | that a changed format is compatible |
+| snapshot compatibility | `resolveSchemaCompatibility` returns the [matrix](schema-evolution.md#target)'s result for a transition | that the new serializer can read the old bytes |
+| migration old-bytes tests | bytes and a snapshot written by the old declaration are read by the restored serializer into the expected current value, or refused explicitly | that Flink's state backends drive the migration |
+| backend migration tests | a real restore migrates or fails on the heap backend and on RocksDB, and the migrated state restores again | that released state restores |
+| released-state compatibility | state that a released Flinkt wrote restores with the current code | nothing further; it's the contract |
+
 ## Binary format fixtures
 
 For binary formats owned by Flinkt, selected records should have immutable golden representations. Examples might include:
@@ -404,6 +417,8 @@ memberProperties
 ```
 
 A stronger integration test should execute the generated serialize, deserialize, copy, and field-access code without `kotlin-reflect` on the runtime classpath. If the supported generated path requires `kotlin-reflect` to be present, the zero-reflection claim is false regardless of benchmark results.
+
+The migration path, meaning the schema-driven reader and the generated migration constructors, gets the same checks. It may allocate temporary field slots, but it may not reflect or write to a `final` field.
 
 Performance profiling may provide additional evidence, but it is not the correctness test.
 
@@ -531,38 +546,23 @@ Direct serializer tests cannot prove that state descriptors, serializer creation
 
 ## Serializer snapshot compatibility
 
-Every schema transition has an explicit expected result. The first release is strict ([Schema evolution](architecture.md#schema-evolution)): an identical schema is compatible as-is, and every structural change is incompatible. No transition is compatible after migration or with a reconfigured serializer.
+Every schema transition has an explicit expected result. The [matrix](schema-evolution.md#target) gives the target. A transition whose migration hasn't landed yet expects `incompatible`, and its expected result changes only in the pull request that enables the migration with the evidence below ([Stages](schema-evolution.md#stages)). No transition expects a reconfigured serializer.
 
-| Change | Serializer result |
-|---|---|
-| identical schema | compatible as-is |
-| enum constant or sealed subtype renamed, reordered or moved, with its ID unchanged | compatible as-is: IDs, not names, are compared |
-| field appended, inserted or removed | incompatible |
-| field reordered or renamed | incompatible |
-| field type change | incompatible |
-| nullability change, in either direction | incompatible |
-| nested schema change | incompatible |
-| collection kind, element, key or value type change | incompatible |
-| enum constant added or removed, or its ID changed | incompatible |
-| sealed subtype added, removed or moved to another level, its ID changed, or its fields changed | incompatible |
-| value-class underlying type change | incompatible |
-| switch between a value class and its underlying type, as `UserId` and `Long` | incompatible, even when the bytes match |
-| type argument change, as `Envelope<User>` to `Envelope<Order>` | incompatible |
-| a nested Flink serializer returns anything other than compatible-as-is | incompatible |
-| the class itself renamed or moved to another package | follows #5's type-identity rule |
+Each row of the matrix has a test that asserts its current result, including the rows that stay incompatible in the target: a field type change, a nullability change, a class rename, an added field without a migration default, a collection kind change, an ID-table change, a switch between a value class and its underlying type, and any change under a `Map` key. An enum or sealed rename that keeps its IDs, and a pure declaration reorder, are compatible as-is. If the implemented format makes a change the snapshot can't see, the matrix records it explicitly instead of letting it pass as identical.
 
-The last row is settled when #5 is. Rows follow the snapshot content in [architecture.md](architecture.md#schema-evolution). If the implemented format makes a change the snapshot can't see, the table records it explicitly instead of letting it pass as identical.
+Keys don't evolve. Each role is tested on its own, because Flink restores values and keys through different code, and each key role is tested with the same change that the value role migrates:
 
-The result is the same in every role the serializer can have, and each role is tested on its own, because Flink restores values and keys through different code:
+| Role | Identical schema | A change that migrates a value | Any other structural change |
+|---|---|---|---|
+| value | restores | migrates\* | fails explicitly |
+| `keyBy` partition key | restores | fails explicitly | fails explicitly |
+| keyed `MapState` user key, heap and RocksDB separately | restores | fails explicitly | fails explicitly |
+| broadcast-state map key | restores | fails explicitly | fails explicitly |
+| a `Map` key inside a value | restores | fails explicitly | fails explicitly |
 
-| Role | Identical schema | Structural change |
-|---|---|---|
-| value | restores | fails explicitly |
-| `keyBy` partition key | restores | fails explicitly |
-| keyed `MapState` user key, heap and RocksDB separately | restores | fails explicitly |
-| broadcast-state map key | restores | fails explicitly |
+\* Once the stage that enables that migration has landed. Until then, it fails explicitly.
 
-"Fails explicitly" means the restore stops with Flink's incompatibility error. On the heap keyed backend and for broadcast state, it can instead stop with the error #5's `restoreSerializer()` raises, because those paths read restored bytes before any compatibility check. Either way it stops before any value is read wrongly or any key's state is filed under another key.
+"Fails explicitly" means the restore stops with Flink's incompatibility error. On the heap keyed backend and for broadcast state, it can instead stop with the error `restoreSerializer()` raises for an incompatible plan, because those paths read restored bytes before any compatibility check. Either way it stops before any value is read wrongly or any key's state is filed under another key, and the error names the canonical type, the first incompatible difference and the role where it's known.
 
 For a key, an identical schema is necessary but not sufficient. A changed `equals()` or `hashCode()` breaks a key without any schema difference. The [key tests](#comparator-and-key-semantics) and [savepoint tests](#savepoint-compatibility) cover that, not the snapshot tests.
 
@@ -582,7 +582,27 @@ new serializer
 correct value
 ```
 
-If compatibility requires migration, the test must exercise that migration path. The first release has no migration branch. Its incompatible branch still gets old-bytes tests: bytes and a snapshot written by the old declaration, restored under the new one, fail explicitly before any value is read.
+If compatibility requires migration, the test must exercise that migration path through Flink:
+
+- The old side is built from the old declaration, compiled separately, and writes the bytes and the snapshot.
+- The restore side has only the new declaration, under a Flink-like user-code classloader. A removed field's class is absent from it where the test is about removed types.
+- The serializer comes from the old snapshot's `restoreSerializer()`, as Flink gets it, and the result from the new snapshot's `resolveSchemaCompatibility`.
+- A backend test restores real state on the heap backend, which reads with the restored serializer during restore, and on RocksDB, which migrates when the state is registered again. One backend's result is never inferred from the other's.
+
+Parsing an old byte array by hand in a test isn't evidence.
+
+A migration isn't proven by a first restore. At least one test per backend continues:
+
+```text
+old state
+    ↓ restore: compatible after migration
+new serializer writes the migrated state
+    ↓ checkpoint or savepoint
+    ↓ restore again
+compatible as-is, values unchanged
+```
+
+The incompatible branch gets old-bytes tests too: bytes and a snapshot written by the old declaration, restored under the new one, fail explicitly before any value is read.
 
 This is a hard rule:
 
@@ -592,15 +612,19 @@ Otherwise snapshot metadata and the actual wire format can drift apart unnoticed
 
 ## Released serializer fixtures
 
-Source code for old serializers will disappear as the project evolves, so compatibility tests need immutable artifacts created from released implementations. Conceptually:
+Source code for old serializers will disappear as the project evolves, so compatibility tests need immutable artifacts created from released implementations. Released fixtures are the authoritative contract for state compatibility, migration included: whatever a later release claims about restoring or migrating released state, it shows against them. Conceptually:
 
 ```text
 compatibility/
 └── serializers/
     ├── 0.1/
-    │   ├── user.bin
-    │   ├── user.snapshot
-    │   └── metadata.json
+    │   └── user-v1/
+    │       ├── schema/              the declaration's source and its persisted schema
+    │       ├── user.snapshot        serializer snapshot bytes
+    │       ├── user.bin             record bytes
+    │       ├── heap-savepoint/
+    │       ├── rocksdb-savepoint/
+    │       └── metadata.json
     └── 0.2/
         └── ...
 ```
@@ -608,12 +632,14 @@ compatibility/
 Metadata should identify enough context to reproduce the contract, such as:
 
 ```text
-Flinkt version
-Flink version
-Kotlin version where relevant
+Flinkt version and commit
+Flink version and adapter line
+Kotlin version
 logical type
-serializer format version
+snapshot and record format versions
 ```
+
+CI restores every released fixture with the current code, at least in the release tier. A migration test can use a released fixture as its old side, with the changed declaration in the test sources.
 
 Released fixtures are historical evidence. A later implementation must not regenerate them merely to make tests pass.
 
@@ -654,6 +680,8 @@ Flink version upgrade
 ```
 
 The job keys its state by a Flinkt-managed type, such as a value class over `Long` or a data class of `Long`s, and checks after the restore that every key's state is found under the logically equal key. A restore that creates the serializers but comes back with empty state doesn't pass.
+
+Once value migration exists, at least one savepoint test also changes a value's schema across the upgrade: the older adapter writes state under the old declaration, and the newer adapter restores it under the new one and migrates it. The key's schema stays the same. That shows an adapter upgrade, Flinkt's snapshot compatibility and a value migration compose. The complete migration matrix runs on each adapter separately ([Serializer snapshot compatibility](#serializer-snapshot-compatibility)).
 
 A release must not claim an upgrade path is supported based only on serializer unit tests when savepoint restoration is part of that claim.
 
@@ -836,6 +864,8 @@ Flink adapter contract tests
 type-information contracts
 serializer contracts
 snapshot compatibility logic
+schema planner tests
+migration old-bytes tests
 ABI validation
 incremental KSP smoke test
 MiniCluster smoke test
@@ -860,6 +890,7 @@ multi-module Gradle tests
 classloader tests
 larger property-based runs
 full MiniCluster integration suite
+backend migration matrix
 Table integration tests
 benchmark smoke runs
 ```
@@ -874,6 +905,7 @@ Release CI provides the evidence behind compatibility claims. It should include:
 every supported and candidate Flink adapter lane
 state integration suite on each of those adapters
 all immutable serializer fixtures
+backend migration matrix, including released fixtures as its old side
 previous released Flinkt → candidate Flinkt compatibility
 real savepoint restoration
 supported Flink upgrade edges
@@ -904,6 +936,7 @@ flinkt/
 │   ├── classloader/
 │   └── table/
 ├── compatibility/
+│   ├── transitions/
 │   ├── serializers/
 │   └── savepoints/
 └── benchmarks/
@@ -927,7 +960,7 @@ compatible after migration
 incompatible
 ```
 
-The first release expects only the first and the last. A test of a key role also states the role's outcome, restores or fails explicitly, apart from the serializer result.
+A test expects compatible after migration only for a transition whose migration has landed. A test of a key role also states the role's outcome, restores or fails explicitly, apart from the serializer result.
 
 A helper that turns all compatibility checks into a generic "passes" assertion would hide which of these results the test expects.
 
@@ -943,7 +976,9 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 **Serializer compatibility:** Does the test read bytes created by the old implementation, or are both writer and reader the new serializer?
 
-**Snapshot results:** Is `compatibleAsIs` backed by a real old-bytes test?
+**Snapshot results:** Is `compatibleAsIs` backed by a real old-bytes test? Is `compatibleAfterMigration` backed by a real migration on the heap backend and on RocksDB, and by a second restore of the migrated state?
+
+**Key roles:** Does each key-role test use the same change that a value test migrates?
 
 **Keys:** Could the test pass with an identity hash code, for example because the second JVM reproduces the first one's identity hashes? Does it compare the bytes of equal keys built in different ways?
 
@@ -971,6 +1006,7 @@ no documented specialized type silently falls back to generic serialization
 the MiniCluster integration pipeline produces correct results
 state survives checkpoint, restart, and restore, and processing continues correctly
 serializer compatibility claims match old bytes
+every migration the matrix claims migrates real state on both backends
 every declared upgrade edge into the line restores a real savepoint
 ```
 

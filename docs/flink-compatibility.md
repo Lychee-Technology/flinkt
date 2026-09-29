@@ -118,9 +118,10 @@ The boundary keeps version-sensitive Flink APIs out of components that don't nee
 These have no dependency on Flink:
 
 ```text
-flinkt-core    @FlinkType, schema and type model, generated-codec SPI
+flinkt-core    @FlinkType, schema and type model, generated-codec SPI,
+               persisted-schema model, compatibility planner, schema-driven reader
 flinkt-ksp     build time only
-generated codecs and schema metadata
+generated codecs, schema metadata and migration constructors
 ```
 
 These layers describe Kotlin types and generated access patterns. They should not need to change because a method was added to `DataStream` or because a Flink serializer configuration API changed. [Layers and modules](architecture.md#layers-and-modules) gives the reason for each module.
@@ -137,6 +138,8 @@ state helpers
 Table API integration
 Flink runtime version checks
 ```
+
+One thing stays identical across adapters on purpose: the name of the serializer snapshot class. Flink writes that name into every checkpoint and loads the class by it on restore, and a savepoint written through one adapter is restored through another ([Generated code and the adapter](architecture.md#generated-code-and-the-adapter)).
 
 A Flink minor upgrade should therefore look mostly like this:
 
@@ -170,9 +173,12 @@ Checked by compiling and running the same probes against Flink 1.20.5, 2.2.1, an
 | Area | 1.20 | 2.2, 2.3 | Effect on the adapter |
 |---|---|---|---|
 | `TypeInformation` serializer factory | abstract `createSerializer(ExecutionConfig)`; `createSerializer(SerializerConfig)` has a default | abstract `createSerializer(SerializerConfig)` only | per-line base class for Flinkt's `TypeInformation` |
-| `TypeSerializerSnapshot.resolveSchemaCompatibility(snapshot)` | default method | abstract | implemented in both; no per-line code |
+| `TypeSerializerSnapshot.resolveSchemaCompatibility(snapshot)` | default method; the older `resolveSchemaCompatibility(TypeSerializer)` is a deprecated default | abstract; the older method is removed | only the new method is implemented, in shared code. The runtime calls `newSnapshot.resolveSchemaCompatibility(oldSnapshot)` on every line |
+| State serializers during the compatibility check | used as they are | wrapped for state TTL on both sides; transparent while TTL doesn't change | none. A migration with TTL enabled is tested on every line ([schema-evolution.md](schema-evolution.md#what-flink-does-on-restore)) |
 | `enableAsyncState()` | absent | on `KeyedStream` and `SingleOutputStreamOperator`, `@Experimental` | 2.x source set only, if a view offers it |
 | Deprecated stream API | `keyBy(int...)`, `keyBy(String...)`, `timeWindow*`, `iterate`, `SinkFunction` sinks, `partitionCustom` by field, `assignTimestampsAndWatermarks` with the old assigners, `sinkTo` for the legacy `connector.sink.Sink` | removed; legacy `SourceFunction`/`SinkFunction` moved to `...legacy` packages | the overloads of forwarded methods (`partitionCustom`, `assignTimestampsAndWatermarks`, `sinkTo`) are forwarded on 1.20 as Flink declares them, which is a listed per-line difference; the rest aren't view methods |
+
+The snapshot rows were also read in the 1.20.5, 2.2.1 and 2.3.0 sources, along with the restore and migration paths [schema-evolution.md](schema-evolution.md#what-flink-does-on-restore) relies on.
 
 ### State on stream objects
 
@@ -484,20 +490,7 @@ The first is JVM/API compatibility and the second is persisted-state compatibili
 
 ## State compatibility fixtures
 
-Flinkt should maintain immutable compatibility fixtures for released serializer formats. For example:
-
-```text
-compatibility/
-├── user-v1/
-│   ├── serializer-snapshot
-│   └── serialized-state
-├── nullable-user-v1/
-│   ├── serializer-snapshot
-│   └── serialized-state
-└── sealed-event-v1/
-    ├── serializer-snapshot
-    └── serialized-state
-```
+Flinkt keeps immutable compatibility fixtures for every released serializer format: the schema, the serializer snapshot, record bytes, and real savepoints on the heap backend and on RocksDB. [Released serializer fixtures](testing.md#released-serializer-fixtures) gives the layout. They're the contract for restoring released state, and for migrating it.
 
 Tests should follow the direction that matters in production:
 
@@ -580,4 +573,4 @@ Does the Flink upgrade force KSP-generated application code to change? If so, de
 
 ### Persisted state
 
-Can the new serializer and snapshot actually restore old state? Base the answer on compatibility fixtures and serializer behavior. Matching schema metadata alone doesn't prove it.
+Can the new serializer and snapshot actually restore old state? Base the answer on compatibility fixtures and serializer behavior. Matching schema metadata alone doesn't prove it. A migration also needs a real restore on each state backend, and no change may migrate a key.
