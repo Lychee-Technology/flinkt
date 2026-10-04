@@ -26,7 +26,7 @@ Flinkt is a Kotlin-first layer over Apache Flink APIs. It has three layers: a KS
 
 **Generated code** implements the Flink-free codec SPI and never subclasses a Flink class. Each adapter owns the `TypeInformation`, `TypeSerializer`, and snapshot classes shared by all generated types. See [architecture.md](docs/architecture.md#generated-code-and-the-adapter).
 
-**Decided type forms.** Collections are `List` and `Map` only. They use one Flinkt-owned encoding as a field and as a top-level type: size, then elements or entries in iteration order. `Set`, `Collection`, the mutable interfaces and arrays fail explicitly. Enum constants and sealed subtypes carry `@FlinkId`, a positive `Int` written as 4 big-endian bytes, and each nested sealed level has its own ID namespace. See [architecture.md](docs/architecture.md#persisted-formats).
+**Decided type forms.** Collections are `List` and `Map` only. They use one Flinkt-owned encoding as a field and as a top-level type: size, then elements or entries in iteration order. `Set`, `Collection`, the mutable interfaces and arrays fail explicitly. Enum constants and sealed subtypes carry `@FlinkId`, a positive `Int` written as 4 big-endian bytes, and each nested sealed level has its own ID namespace. An enum constant or object subtype is written as its ID alone, so an object subtype holds no stored state and an enum no `var`. A codec's bytes never depend on the output view it writes to. See [architecture.md](docs/architecture.md#persisted-formats).
 
 ## Invariants
 

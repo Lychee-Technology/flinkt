@@ -482,6 +482,8 @@ Declaration order and ordinals aren't stable. Inserting or reordering a subtype 
 
 A missing or duplicate ID is a compile error. Reading an ID the current code doesn't declare fails, and any change to the set of IDs is incompatible in the first release. Enum constants with bodies, `object` and `data object` subtypes, and nested sealed hierarchies are supported, and each nested level numbers its own subtypes. [Enum and sealed identity](docs/architecture.md#enum-and-sealed-identity) gives the encoding.
 
+An enum constant, an `object` and a `data object` are written as their ID alone, and reading one returns the constant or singleton of the JVM that reads it. None of its properties are written. So an `object` or `data object` subtype is a stateless marker: a stored property on it is a compile error, and a subtype that carries data is a data class. An enum can declare `val`s, as in `Priority(val weight: Int)`, because every JVM builds them from the declaration. A stored `var` on an enum is a compile error.
+
 ---
 
 ## State
