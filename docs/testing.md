@@ -124,7 +124,9 @@ data class Bad(
 
 The test should verify both the failure and the quality of the diagnostic. The error message should identify enough context to act on, such as the field `Bad.value` and the type `UnsupportedType`.
 
-Negative cases should cover constraints such as missing, duplicate or non-positive stable IDs, invalid annotation combinations, unsupported collection kinds, unsupported generic forms, unsupported recursive structures, and unsupported fields. A processor that fails correctly but reports only an internal exception is still wrong.
+Negative cases should cover constraints such as missing, duplicate or non-positive stable IDs, invalid annotation combinations, unsupported collection kinds, unsupported generic forms, unsupported recursive structures, unsupported fields, and stored state that the format doesn't persist. A processor that fails correctly but reports only an internal exception is still wrong.
+
+Unpersisted state has no other test. Inside one JVM, an `object` subtype or an enum constant decodes to the instance it was written from, so a `var` on it survives every in-process round trip and is lost only in the JVM that restores ([Enum and sealed identity](architecture.md#enum-and-sealed-identity)). The negative cases are a stored property, a delegated property and inherited state on an `object` and on a `data object` subtype, and a `var` with a backing field and one with a delegate, on an enum and in a constant's body. The positive cases are a computed property and a `const val` on an object subtype, and a `val` and a computed `var` on an enum.
 
 ## Incremental compilation
 
@@ -403,6 +405,8 @@ length encoding changed
 
 A golden-byte failure means the persisted representation changed, which may be intended. Either way, the change needs an explicit compatibility decision.
 
+A fixture's bytes don't depend on the output view either. A generated codec writes to whichever view the adapter passes, and Flink's views differ ([Generated code and the adapter](architecture.md#generated-code-and-the-adapter)). So each fixture is written through a `DataOutputSerializer` and through a paged view, a subclass of `AbstractPagedOutputView`, and both give the golden bytes. The fixtures include a record with a `Float` and a `Double` NaN whose payload isn't the canonical one. A codec that calls `writeFloat` or `writeDouble` passes that case on a `DataOutputStream` or a `DataOutputSerializer`, and fails it on the paged view.
+
 ## Reflection-free generated paths
 
 "Reflection-free hot path" should be tested structurally rather than inferred from a benchmark. Use more than one signal.
@@ -434,8 +438,8 @@ Performance profiling may provide additional evidence, but it is not the correct
 
   A `keyBy` with a `TypeInformation` Flinkt didn't build is shown to reach Flink's validation unchecked.
 - **Hash stability.** Representative keys' hash codes and key groups are pinned as constants: `Long`, `String`, a value class over `Long`, a data class of two `Long`s, and a generic data-class instance. A Kotlin or JDK upgrade that changed the hash formula then fails a test. A second JVM computes the same values. A fresh JVM running the same code can reproduce identity hash codes: on JDK 25, an enum constant had the same `hashCode()` in two runs, and one extra identity hash earlier in the run changed it. So the second JVM perturbs its identity-hash sequence before computing, or the test can't tell an identity hash from a stable one.
-- **Byte determinism.** In each context that needs identical bytes, equal keys built in different ways serialize to equal bytes, and unequal keys to different bytes. The cases include NaNs with different payloads (equal), `0.0` and `-0.0` (unequal), and strings that differ only in an unpaired surrogate (unequal).
-- **Restore.** Keyed state under each allowed kind survives a checkpoint restored in a second JVM, on the heap and RocksDB backends, with every key's state found under the logically equal key. A BATCH job groups equal keys built in different ways.
+- **Byte determinism.** In each context that needs identical bytes, equal keys built in different ways serialize to equal bytes, and unequal keys to different bytes. The cases include NaNs with different payloads (equal), `0.0` and `-0.0` (unequal), and strings that differ only in an unpaired surrogate (unequal). A Flinkt-owned format is checked on a paged view as well as on a `DataOutputSerializer` ([Binary format fixtures](#binary-format-fixtures)). The bytes of a built-in `Float` or `Double` key are Flink's and depend on the view, so their NaN case is in the restore tests below, on the paths where Flink builds key bytes.
+- **Restore.** Keyed state under each allowed kind survives a checkpoint restored in a second JVM, on the heap and RocksDB backends, with every key's state found under the logically equal key. A BATCH job groups equal keys built in different ways. For a `Float` or `Double` key, both include NaNs with different payloads.
 
 The first release supplies no comparators, so `isKeyType()` and `isSortKeyType()` are pinned to `false`. If a later release makes Flinkt own comparator behavior, it needs a dedicated contract suite. Relevant behavior includes:
 

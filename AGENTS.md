@@ -29,7 +29,7 @@ Flinkt is a Kotlin-first layer over Apache Flink APIs. It has three layers: a KS
 
 **Schema evolution.** Records are compact, and the snapshot carries a symbolic, recursive schema. A Flink-free planner in `flinkt-core` compares the old and current schemas and gives one plan, which both `resolveSchemaCompatibility` and the old-layout serializer that `restoreSerializer()` returns use. See [schema-evolution.md](docs/schema-evolution.md#restore-model).
 
-**Decided type forms.** Collections are `List` and `Map` only. They use one Flinkt-owned encoding as a field and as a top-level type: size, then elements or entries in iteration order. `Set`, `Collection`, the mutable interfaces and arrays fail explicitly. Enum constants and sealed subtypes carry `@FlinkId`, a positive `Int` written as 4 big-endian bytes, and each nested sealed level has its own ID namespace. See [architecture.md](docs/architecture.md#persisted-formats).
+**Decided type forms.** Collections are `List` and `Map` only. They use one Flinkt-owned encoding as a field and as a top-level type: size, then elements or entries in iteration order. `Set`, `Collection`, the mutable interfaces and arrays fail explicitly. Enum constants and sealed subtypes carry `@FlinkId`, a positive `Int` written as 4 big-endian bytes, and each nested sealed level has its own ID namespace. An enum constant or object subtype is written as its ID alone, so an object subtype holds no stored state and an enum no `var`. A codec's bytes never depend on the output view it writes to. See [architecture.md](docs/architecture.md#persisted-formats).
 
 ## Invariants
 
