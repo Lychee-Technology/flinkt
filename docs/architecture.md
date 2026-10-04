@@ -15,6 +15,7 @@ The architecture has to preserve these:
 - **Version isolation.** Flink-facing code lives in per-line adapters, and the application API is the same on every adapter.
 - **Interoperability.** Every Flink API stays usable with a stream that went through Flinkt.
 - **Strict persisted-state compatibility**, backed by old-bytes and savepoint evidence.
+- **Keys that stay found.** A modeled type is accepted as a key only where Flinkt can check mechanically that its hash code, equality and bytes are the same in every JVM that restores its state.
 
 Two things that looked like requirements are preferences, and this design gives them up. One is that a Flinkt stream is directly assignable to `DataStream<T>`. The other is that leaving Flinkt needs no syntax at all. Both would come at the expense of the requirements above, as the next section shows.
 
@@ -183,6 +184,13 @@ KSP generates, for each `@FlinkType` declaration:
 
 Generated code mentions no Flink type, so it doesn't change with the Flink line. Flink's `DataInputView` and `DataOutputView` implement `DataInput` and `DataOutput`, so the adapter passes them through without copying.
 
+The view a codec writes to isn't part of its format: the bytes must be the same on every view. Flink's views don't all write the same bytes for the same call (checked on 1.20.5, 2.2.1 and 2.3.0):
+
+- `writeFloat` and `writeDouble` write one canonical NaN on `DataOutputSerializer` and `DataOutputViewStreamWrapper`, as the `java.io.DataOutput` contract says. On `AbstractPagedOutputView`, which Flink's sort buffers write records to, they keep each NaN's raw bits.
+- `writeBytes(String)` advances a `DataOutputSerializer` by twice the string's length, so it emits the string's bytes and then as many stale buffer bytes.
+
+So a Flinkt-owned format leaves no byte to the view's implementation. A codec converts floating-point values itself ([Deterministic bytes](#deterministic-bytes)), and #5 builds its string encoding from calls that every view writes alike.
+
 Generated code never subclasses a Flink class. The Flink protocol classes differ between lines: in 1.20, `TypeInformation.createSerializer(ExecutionConfig)` is the abstract factory and `TypeSerializerSnapshot.resolveSchemaCompatibility(snapshot)` has a default. In 2.x, `createSerializer(SerializerConfig)` is the abstract factory and `resolveSchemaCompatibility` is abstract. A generated `TypeInformation` would therefore need one build per line. Instead, each adapter has one `TypeInformation`, one `TypeSerializer` and one `TypeSerializerSnapshot` implementation shared by every generated type. That keeps comparators and snapshot logic in one place. Flink creates serializers from `TypeInformation` with its own configuration, and Flinkt doesn't keep global serializer instances.
 
 A consuming module reuses generated metadata from its dependencies and doesn't regenerate code for classes it doesn't own.
@@ -196,14 +204,259 @@ Two helper families have different names because they return different things:
 
 Binding stays a visible call in `open()`. A property delegate could hide it, but then the point where state becomes available would be less obvious. Flink 2.x's asynchronous state API (`org.apache.flink.api.common.state.v2`, `@Experimental`) isn't covered yet.
 
+## Persisted formats
+
+Generated serializers write bytes that users' checkpoints and savepoints keep, and the snapshot Flink stores beside them decides whether a later job may read those bytes. Record layout, null representation, string encoding and snapshot format are still open ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)), and so is the value-class representation ([#18](https://github.com/Lychee-Technology/flinkt/issues/18)). The decisions below build on #5: where an example shows a record, a scalar or a nullable value in angle brackets, its bytes are #5's.
+
+### Collections
+
+Decided in [#16](https://github.com/Lychee-Technology/flinkt/issues/16).
+
+| Kotlin type | First release |
+|---|---|
+| `List<T>` | supported |
+| `Map<K, V>` | supported |
+| `Set<T>` | not supported |
+| `Collection<T>`, `Iterable<T>` | not supported |
+| `MutableList<T>`, `MutableSet<T>`, `MutableMap<K, V>`, `MutableCollection<T>` | not supported, and not treated as the read-only type |
+| arrays, including `IntArray` and the other primitive arrays | not supported |
+
+An unsupported collection type fails explicitly, at compile time as a `@FlinkType` field and in `typeInfo<T>()` as a top-level type. Elements, keys and values can be any modeled type, nullable ones included, so `List<User?>` and `Map<UserId, List<Event?>>` work once their element types do.
+
+`List` and `Map` cover the README's cases: ordered homogeneous values, key-value structures, nested generics and nullable nested values. `Set` is left out because equal sets have no natural byte order. `setOf(a, b)` equals `setOf(b, a)`, but writing each in iteration order gives different bytes. Fixing that means choosing an order for arbitrary element types and buffering and sorting every set's elements, and no first-release use case needs it. The mutable interfaces are rejected rather than treated as their read-only counterparts. Treating them that way would give two types that Kotlin distinguishes one `TypeInformation`, and it would invite mutating values that Flink may keep in heap state or, with object reuse, pass to chained operators without copying. On the JVM, `MutableList<T>` and `List<T>` are both `java.util.List`, and `typeOf` distinguishes them only through `KType.equals`. Their `toString()` and classifier are the same (checked on Kotlin 2.4.20). A Java collection that Kotlin sees as a platform type, `(Mutable)List<T!>!`, equals neither and passes a naive mutability check as mutable. `typeInfo<T>()` resolves it as `List<T>`, just as it resolves a platform type as non-null.
+
+**Runtime values and copies.** Decoding builds a `java.util.ArrayList` for a `List` and a `java.util.LinkedHashMap` for a `Map`, which keeps the encoded entry order. Neither is wrapped in a read-only view. Kotlin's own read-only collections are ordinary JVM collections seen through a read-only interface, and a wrapper would cost an allocation per value without hiding anything Kotlin exposes. Flink's `ListSerializer` decodes into an `ArrayList` too. A collection type is not immutable (`isImmutableType` is false), because a producer may still hold the object it emitted and mutate it. `copy` builds a new `ArrayList` or `LinkedHashMap` in the same order and copies each element, key and value with that type's serializer, so a copy never shares the source collection object.
+
+**Encoding.** A `List` is its size followed by its elements in list order. A `Map` is its size followed by its entries, key then value, in the map's iteration order. The size is a 4-byte big-endian `Int` from `DataOutput.writeInt`, the same framing as Flink's `ListSerializer` and `MapSerializer` and as [stable IDs](#enum-and-sealed-identity). Nothing measured shows that a variable-length size would be worth its edge cases. Each element, key and value is written by the codec for its full type, so a `User?` element is written exactly as #5 writes a `User?` anywhere else, and a collection adds no null bitmap of its own. A negative size fails the read. So does a map that decodes fewer distinct keys than its size, which would otherwise merge entries silently.
+
+```text
+List<User> = [User(1, "a"), User(2, "b")]
+00 00 00 02                 size 2
+<User(1, "a")>              #5's record bytes
+<User(2, "b")>
+
+List<User?> = [User(1, "a"), null]
+00 00 00 02
+<User(1, "a") as User?>     #5's nullable encoding, non-null
+<null as User?>             #5's nullable encoding, null
+
+Map<Long, User> = {7 → User(1, "a")}
+00 00 00 01
+<7 as Long>
+<User(1, "a")>
+
+emptyList<User>()
+00 00 00 00
+```
+
+The bytes in angle brackets are fixed when #5 is decided. [#17](https://github.com/Lychee-Technology/flinkt/issues/17) turns these examples into golden fixtures.
+
+**One encoding, Flinkt's own `TypeInformation`.** A collection written as a record field and a collection that is itself the stream or state type use the same Flink-free codec. For a top-level `typeInfo<List<User>>()` or `typeInfo<Map<Long, User>>()`, each adapter supplies its own `TypeInformation`, `TypeSerializer` and snapshot over that codec, not Flink's `ListTypeInfo` or `MapTypeInfo`. Flink's `MapSerializer` writes its own null flag before every value and decodes into a `HashMap`, which drops the entry order (checked in 2.3.0). Flink's collection snapshots also resolve compatibility by Flink's rules, not by [Flinkt's](#schema-evolution). Using them for top-level collections would give one Kotlin type two persisted formats and two compatibility policies. Flink's `ListState` and `MapState` are unaffected. They're state structures whose element, key and value types come from `typeInfo`.
+
+**Deterministic bytes.** A `List`'s bytes are deterministic when its elements' bytes are, because list equality includes order. A `Map`'s bytes aren't. Two equal maps built in different orders serialize differently, and the first release doesn't sort entries to prevent it. Sorting would mean serializing, buffering and ordering every key before writing, and every `Map` value would pay that cost to support map-valued keys that nothing needs. A `Map` is therefore never a key where a key context needs identical bytes for equal keys, and in the first release [no collection is a key](#keys). Golden fixtures build their maps in a fixed order.
+
+**Snapshot.** The snapshot records the collection kind and the complete nested snapshot of the element type, or of the key and value types, with nullability and type arguments. Changing the kind or any nested type changes the schema, which is incompatible in the first release ([Schema evolution](#schema-evolution)).
+
+### Enum and sealed identity
+
+Decided in [#20](https://github.com/Lychee-Technology/flinkt/issues/20).
+
+Every enum constant and every sealed subtype that Flinkt serializes declares its persisted ID with `@FlinkId`. The enum, the sealed root, every nested sealed type and every subtype also carry `@FlinkType`, so a subtype is part of the generated type model because it's declared, never because Flinkt discovered it.
+
+```kotlin
+@FlinkType
+enum class Color {
+    @FlinkId(1) RED,
+    @FlinkId(2) GREEN,
+    @FlinkId(7) BLUE,
+}
+
+@FlinkType
+sealed interface Event
+
+@FlinkType
+@FlinkId(1)
+sealed interface UserEvent : Event
+
+@FlinkType
+@FlinkId(1)
+data class UserCreated(val userId: Long) : UserEvent
+
+@FlinkType
+@FlinkId(2)
+data class UserDeleted(val userId: Long) : UserEvent
+
+@FlinkType
+@FlinkId(2)
+data object Shutdown : Event
+```
+
+An ID is never derived from declaration order, ordinal, source position or name. Order and ordinals change when a constant is inserted or the source is reordered. A name-derived ID would let a rename silently change what old bytes mean, and Flinkt prefers explicit incompatibility to silently reinterpreting state. With an explicit ID, a constant or subtype can be renamed, reordered or moved to another file without changing its bytes.
+
+- **Encoding.** An ID is a positive `Int`, written as 4 big-endian bytes with `DataOutput.writeInt`. Zero and negative IDs are compile errors and stay reserved. An enum value is its ID and nothing else. A sealed value is its subtype's ID followed by the subtype's payload. For a data class that's #5's record bytes, for an `object` or `data object` it's nothing, and for a nested sealed type it's the nested union's own ID and payload. A fixed-width `Int` keeps generated code, fixtures and debugging simple, and four bytes per tag are acceptable until a measurement says otherwise.
+
+  ```text
+  Color.GREEN                     00 00 00 02
+  Color.BLUE                      00 00 00 07
+  Shutdown as Event               00 00 00 02
+  UserCreated(42) as Event        00 00 00 01 | 00 00 00 01 | <UserCreated(42)>
+  UserDeleted(42) as Event        00 00 00 01 | 00 00 00 02 | <UserDeleted(42)>
+  UserDeleted(42) as UserEvent    00 00 00 02 | <UserDeleted(42)>
+  ```
+
+  Declaring `BLUE, RED, GREEN`, or `Shutdown` before `UserEvent`, gives the same bytes.
+- **Nested hierarchies.** Each sealed type is its own tagged union with its own ID namespace. A nested sealed type has an ID in its parent's namespace and assigns IDs to its own direct subtypes, as `UserEvent` does above. A type that directly extends more than one modeled sealed type is a compile error in the first release. It would have one ID in two namespaces, and with nesting, two paths from the root.
+- **Forms.** Supported: enums, including constants with bodies; sealed interfaces, and sealed classes without stored state of their own; data-class, `object`, `data object` and nested sealed subtypes. Decoding returns the declared constant or singleton instance. A constant with a body has its own JVM class, such as `Color$GREEN`, so generated code maps constants to IDs with a `when` over the constants, never by class or ordinal. A sealed class with stored state of its own fails [#11](https://github.com/Lychee-Technology/flinkt/issues/11)'s rule for inherited state. Whether generic sealed hierarchies are supported is [#22](https://github.com/Lychee-Technology/flinkt/issues/22)'s decision. If they are, IDs belong to declarations, not to type arguments.
+- **Instance state.** An enum constant, an `object` and a `data object` are written as an ID alone, and decoding returns the instance that the reading JVM created when it initialized the class. Nothing that instance holds is in the bytes. A `var` set to 42 before the value is written reads as its initial value in the JVM that restores it, on an object and on an enum constant alike (checked on Kotlin 2.4.20, in two JVMs). A round trip inside one JVM returns the same instance, so it can't show the loss. State that wouldn't survive is therefore a compile error, as it is for a data class ([#11](https://github.com/Lychee-Technology/flinkt/issues/11)):
+  - An `object` or `data object` subtype is a stateless marker. It follows #11's rule with no persisted properties at all: a property with a backing field, a delegated property, and state inherited from a superclass with fields of its own are errors. Computed properties and `const val`s are allowed. A subtype that carries data is a data class.
+  - An enum's properties are never written. A `val`, as in `Color(val rgb: Int)`, belongs to the constant, and every JVM builds it from the declaration, so it's allowed. A stored `var` is an error, whether it has a backing field or a delegate, on the enum and in a constant's body.
+
+  The two rules differ on `val`. An object subtype sits beside data-class subtypes in one hierarchy, and #11 already rejects a stored body property there, because KSP can't tell an initializer that every JVM evaluates alike from one that reads a clock. An enum's `val` has the same weakness, but it's how a constant carries fixed data, and rejecting it would reject most real enums. Neither rule sees inside a `val`: a mutable object it refers to isn't persisted either. Relaxing either rule later changes no bytes.
+- **Snapshot and unknown IDs.** The snapshot records the ID table: each ID with its constant's or subtype's name, and each sealed subtype's payload schema. Restoring against a different table is incompatible in the first release ([Schema evolution](#schema-evolution)). That covers an ID added, removed or changed, a subtype moved to another level, and a subtype whose fields changed. Decoding an ID the current type doesn't have fails with an error naming the type and the ID. It never produces `null`, a default or another subtype. The two checks catch different failures. The snapshot comparison catches a changed declaration before any record is read, and the decode check catches bytes the snapshot didn't describe.
+- **Names aren't identity.** The table is compared by ID, and a subtype by its fields, not by its name. Renaming or moving a constant or subtype that keeps its ID doesn't change the schema. The flip side is that Flinkt can't tell a rename from an existing ID given to a different constant, and old state would then decode as the new constant. An ID is permanent and is never reused for something else. Renaming the enum class or the sealed root itself follows #5's type-identity rule.
+- **Compile-time errors.** A missing ID. A duplicate ID in one namespace, naming both declarations. An ID below 1. `@FlinkId` anywhere other than an enum constant or a subtype of a modeled sealed type. A subtype without `@FlinkType`, or one Flinkt can't model. A type that directly extends two modeled sealed types. An `object` or `data object` subtype with stored state. An enum with a stored `var`.
+- **Keys.** A stable ID is a stable byte encoding, not a stable `hashCode()`. `Enum.hashCode()` and a plain `object`'s `hashCode()` are identity hash codes. A `data object`'s is the hash of its fully qualified name, such as `com.example.Event.Shutdown` (checked on Kotlin 2.4.20), so renaming it or moving it to another package or enclosing declaration changes it. [Keys](#keys) says where each can be a key.
+
+## Keys
+
+Decided in [#23](https://github.com/Lychee-Technology/flinkt/issues/23), implemented in [#32](https://github.com/Lychee-Technology/flinkt/issues/32).
+
+Being serializable doesn't make a type a safe key, and a compatible serializer doesn't make a key safe after an upgrade. Flink uses a key's `hashCode()`, `equals()` and serialized bytes in ways that are persisted, and it uses them differently in three places. Flinkt decides for each place which Kotlin kinds it accepts. It can't change how Flink hashes, compares or stores a key.
+
+| Context | Where Flinkt checks it | What Flink does with the key | Needs a `hashCode()` that's the same in every JVM | Needs equal keys to have identical bytes |
+|---|---|---|---|---|
+| `keyBy` partition key | the view's `keyBy`, when the job graph is built | `murmurHash(key.hashCode())` picks the key group, which checkpoints persist. Heap state is found by `equals()` and `hashCode()`, RocksDB state by the serialized key, and BATCH input is sorted by serialized key bytes | yes | yes |
+| keyed `MapState` user key | `runtimeContext.mapState<K, V>()`, when the state is bound in `open()` | addresses entries inside one partition key's state. The heap backend rebuilds a Java map in the restoring JVM. RocksDB addresses and orders entries by the serialized user key. No part in key groups | no | yes, on RocksDB |
+| broadcast-state map key | nowhere yet: broadcast is raw Flink | operator state. Every parallel instance holds the whole map, and restore reads each entry into a Java map in the restoring JVM | no | no |
+
+Every context needs `equals()` and `hashCode()` to agree within one JVM. Where bytes matter, they also have to agree with `equals()` both ways. Equal keys with different bytes are separate RocksDB entries, and unequal keys with the same bytes are one entry. Checked in the 2.3.0 sources (`KeyGroupRangeAssignment`, `SortingDataInput`, `DefaultOperatorStateBackend`, `OperatorStateRestoreOperation`). The earlier review of [#25](https://github.com/Lychee-Technology/flinkt/issues/25) checked the restore paths in 1.20.5 as well.
+
+### Eligibility
+
+| Kind | `keyBy` partition key | keyed `MapState` user key | broadcast-state key |
+|---|---|---|---|
+| non-null `Boolean`, `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Char`, `String` | allowed | allowed | allowed |
+| value class | allowed if eligible | allowed if eligible | allowed if eligible |
+| `@FlinkType` data class, including a generic one with its type arguments | allowed if eligible | allowed if eligible | allowed if eligible |
+| enum | rejected | allowed, subject to evidence | allowed, subject to evidence |
+| `object`, `data object` | rejected | rejected | rejected |
+| sealed hierarchy | rejected | rejected | rejected |
+| `List`, `Map` | rejected | rejected | rejected |
+| nullable type `K?` | rejected | rejected | rejected |
+
+A data class or value class is eligible in a context only if all of these hold:
+
+- it's non-null;
+- its `equals()` and `hashCode()` are the ones the Kotlin compiler generates. The class declares neither, and doesn't inherit a final one from a superclass, which would replace the generated pair. Kotlin 2.4.20 doesn't let a value class declare them ("reserved for future releases"). If a later Kotlin does, a value class that declares them is ineligible too;
+- every persisted component is eligible in the same context. For a data class that means its constructor properties, for a value class its underlying value, in both cases after substituting type arguments;
+- for a value class, #18's representation of it is deterministic.
+
+The rule is recursive, and one ineligible component makes the whole key ineligible. `UserKey(val tenant: TenantId, val id: Long)` is a partition key only if `TenantId` and `Long` are, and `Envelope<T>` is decided separately for each `T`. A data class with an enum property can be a `MapState` user key but not a partition key. A nullable component makes a key ineligible in every context, just as a nullable key does. KSP records in each generated type's metadata whether its equality is compiler-generated, so the check reads metadata and uses no reflection.
+
+The reasons:
+
+- **Proof, not trust.** Every eligible kind is a final class, so the `hashCode()` that runs is the one Flinkt checked. A compiler-generated `hashCode()` combines the components' hash codes, and for the built-ins those are specified by the Java SE API and the same in every JVM. Equality is component-wise, and each component's bytes are deterministic, so equal keys have equal bytes and heap and RocksDB address the same entries. Flinkt can't reason about a hand-written `equals()` or `hashCode()`. It can't tell whether one is stable across JVMs, agrees with the bytes, or will stay the same in the next release. A key that has one is rejected, rather than accepted with state that a code change can make unreachable.
+- **Enums: stable bytes, unstable hash.** #20's ID makes an enum's bytes stable, but `Enum.hashCode()` is an identity hash code. It can differ in the restoring JVM and move the key group, which is why Flink itself rejects `EnumTypeInfo` as a `keyBy` key. A `MapState` user key and a broadcast-state key never reach key-group assignment. On restore, the heap backend and broadcast state rebuild their maps in the new JVM, where the decoded constant is the canonical instance, and RocksDB compares the ID bytes. So an enum is allowed in those two contexts once #23's feasibility test shows, on each target line, that every entry restored in a second JVM is found through its constant: heap and RocksDB `MapState`, and broadcast state. Otherwise enums are rejected there too.
+- **Objects and sealed hierarchies.** A plain `object`'s hash code is an identity hash code, and a `data object`'s is its qualified name's, which a rename or a package move changes. A single-valued key is also of no use. As a partition key it sends every record to one key group, and a map with one possible key is a `ValueState`. Sealed hierarchies mix data-class and object subtypes, and no first-release use case needs one as a key.
+- **Collections.** A `List<T>` value can be any `java.util.List` implementation at runtime, with whatever `hashCode()` it has, so nothing about it can be proved before it's serialized. A `Map`'s bytes also depend on its iteration order ([Collections](#collections)).
+- **Nullable keys.** Flink rejects a null partition key per record at runtime (`KeyGroupRangeAssignment`: "Assigned key must not be null!"), so Flinkt rejects `K?` when the graph is built instead. For `MapState` and broadcast keys, and for nullable components, the first release keeps the same rule.
+
+Apart from the enum partition key, every rejection can be relaxed later without changing any existing key's bytes or hash code. Tightening a rule after users have keyed state by a type would strand that state, so the first release starts narrow.
+
+### Deterministic bytes
+
+The partition-key and `MapState` rules need equal keys to have equal bytes and unequal keys different bytes. They rely on these formats:
+
+- Flink's own serializers for the built-ins, which `typeInfo` returns for them ([#7](https://github.com/Lychee-Technology/flinkt/issues/7)). Their bytes are Flink's, not Flinkt's. `FloatSerializer` and `DoubleSerializer` call the view's `writeFloat` and `writeDouble`, so a `Float` or `Double` key has one NaN encoding only on a view that canonicalizes ([Generated code and the adapter](#generated-code-and-the-adapter)). Flink builds RocksDB keys (`SerializedCompositeKeyBuilder`) and BATCH sort keys (`SortingDataInput`) in a `DataOutputSerializer`, which does (checked on 1.20.5, 2.2.1 and 2.3.0). The rule for these two key types rests on that Flink behavior, which Flinkt doesn't control.
+- #5's records, which write fields in a fixed order, so a record's bytes are deterministic when its fields' bytes are. Two properties of #5's format are therefore requirements. Every NaN has one encoding on every view, matching data-class equality: a codec converts a `Float` or `Double` with `floatToIntBits` or `doubleToLongBits` and writes the result with `writeInt` or `writeLong`. It never calls `writeFloat` or `writeDouble`, which would leave the NaN's bytes to the view. Every `String` is encoded losslessly. `String.toByteArray(Charsets.UTF_8)` isn't lossless: it writes an unpaired surrogate such as `"\uD800"` as `?`, the same byte as `"?"` (checked on JDK 25), which would make two different keys one.
+- #20's IDs, one fixed encoding per constant.
+- #18's value-class representation, once #18 decides it.
+
+Maps aren't deterministic ([Collections](#collections)), and no collection is a key.
+
+### Where the rules apply
+
+- **The view's `keyBy` with a reified key type** applies the partition-key rules to the key's full Kotlin type when the job graph is built, before it calls Flink.
+- **The view's `keyBy` with an explicit `TypeInformation`** applies them if the `TypeInformation` is one of Flinkt's own classes, which carry the canonical Kotlin type. Any other `TypeInformation`, whether it comes from Flink, a library or the caller, is an intentional escape hatch. Flinkt checks nothing, Flink's `keyBy` and its own validation apply, and the caller gets Flink's guarantees instead of Flinkt's key-safety guarantee. It's the same exit as passing a `TypeInformation` for a type Flinkt doesn't model, or calling `asFlink().keyBy(…)`. `typeInfo<Long>()` returns Flink's `BasicTypeInfo` (#7), so it counts as foreign, and Flink accepts every built-in that Flinkt would. Policing a foreign `TypeInformation` would add little safety, because the caller can always use raw Flink.
+- **`runtimeContext.mapState<K, V>()`** applies the `MapState` user-key rules when it binds the state in `open()`, before the first record.
+- **`mapStateDescriptor<K, V>()`** applies no key rule. Its descriptor can become keyed `MapState` or broadcast state, and the helper can't tell which. A descriptor passed to Flink directly gets Flink's checks.
+- **Broadcast-state keys** have no enforcement point until a view offers broadcast. The README states their rules.
+
+A rejection names the canonical Kotlin type, the context, the component that makes a composite ineligible, and the reason.
+
+`isKeyType()` and `isSortKeyType()` return `false` for every Flinkt `TypeInformation`, and Flinkt supplies no `TypeComparator`. Flink defines a key type as hashable and comparable, and nothing in the first release compares Flinkt keys with a comparator. DataStream `keyBy` never reads `isKeyType()` (`KeyedStream.validateKeyType`), and BATCH sorting compares serialized bytes (`SortingDataInput`). The Flink paths that do read the flags are `sortPartition` by `KeySelector` and field-expression keys, on 1.20, 2.2 and 2.3 (checked in the jars). They reject a Flinkt key with Flink's own `InvalidProgramException` instead of looking for a comparator that doesn't exist. The [comparator contract](testing.md#comparator-and-key-semantics) applies if a later release adds comparators.
+
+### What a snapshot can't see
+
+A serializer snapshot compares schemas, not method bodies. Suppose a data class that keys persisted state gains an `override fun hashCode()`. Its schema is unchanged, but its key groups move. A changed `equals()` changes which keys are the same. Either is a breaking state change, even though the serialized schema is identical.
+
+Flinkt doesn't try to detect this in the snapshot. The eligibility rules admit only compiler-generated equality over components whose hash codes are specified, so an eligible key's behavior follows from its schema. The same edit also makes the type ineligible, so the upgraded job's `keyBy` through the view fails when its graph is built. Through `asFlink()` or a foreign `TypeInformation`, nothing checks it. Cross-release savepoint tests ([#29](https://github.com/Lychee-Technology/flinkt/issues/29)) are the system-level backstop.
+
+One dependency remains. The formula of the compiler-generated `hashCode()` is Kotlin compiler behavior, not a documented guarantee. For a data class it's `31 * h + component.hashCode()`, so `UserKey(1, 2)` hashes to 33. For a value class it's the underlying value's hash code. Both were checked on Kotlin 2.4.20. #32 pins the hash codes and key groups of representative keys as constants, so a Kotlin or JDK upgrade in Flinkt's build that changed them fails a test.
+
+## Schema evolution
+
+Decided in [#25](https://github.com/Lychee-Technology/flinkt/issues/25).
+
+In the first release, a Flinkt-owned serializer snapshot resolves like this:
+
+| Old snapshot against the current declaration | Result |
+|---|---|
+| identical schema | `compatibleAsIs` |
+| any structural difference | `incompatible` |
+
+Flinkt snapshots never return `compatibleAfterMigration` or `compatibleWithReconfiguredSerializer` in the first release, even for a change a migration could handle. A nested Flink serializer whose result is anything other than compatible-as-is makes the enclosing Flinkt result incompatible. [testing.md](testing.md#serializer-snapshot-compatibility) lists the transitions.
+
+"Identical" means identical in everything the snapshot compares:
+
+- the type's identity and format version (#5);
+- field names and order;
+- full field types, with nullability and type arguments, and nested snapshots;
+- collection kinds and element types;
+- value-class representations and underlying types;
+- enum and sealed ID tables, with each subtype's fields.
+
+Enum constant and sealed subtype names are recorded but not compared ([Enum and sealed identity](#enum-and-sealed-identity)).
+
+**Why strict.** A migration-capable serializer has to work across `restoreSerializer()`, snapshot resolution, old bytes, new declarations, user-code classloaders, the heap and RocksDB backends, savepoints and every future adapter. No released Flinkt state needs migrating yet. So the first release doesn't commit to a migration mechanism before real compatibility pressure shows what it should be. Strict compatibility keeps one invariant instead: if the persisted schema changed, restore stops explicitly. It keeps two branches, each backed by old-bytes tests.
+
+`compatibleWithReconfiguredSerializer` has no first-release use case, and it's dangerous for keys. Flink accepts it for a partition-key serializer. It would be safe only if every logical key kept its bytes, `equals()`, `hashCode()`, key group and backend lookup, and nothing needs that proof yet.
+
+**Rich snapshots keep migration possible.** Strict doesn't mean minimal. The first release's snapshot records the full schema, never only a hash:
+
+- the logical type identity and format version;
+- field names and order;
+- full nested Kotlin types, with nullability and generic arguments;
+- nested snapshots;
+- collection shape;
+- value-class representation;
+- the enum and sealed ID tables.
+
+A later release can then add migrations for state the first release wrote, without changing what the first release persisted. #5 decides the snapshot format under this requirement, and its `restoreSerializer()` restores only an identical schema.
+
+**Roles.** A persisted key's identity includes its `equals()`, `hashCode()`, key group and backend lookup, not just readable bytes. So key compatibility is a separate question from serializer compatibility. The first release answers it the same way in every role:
+
+| Role | Identical schema | Structural change |
+|---|---|---|
+| value: stream record, `ValueState`, `ListState` element, `MapState` value | restores | fails explicitly |
+| `keyBy` partition key | restores\* | fails explicitly |
+| keyed `MapState` user key, heap and RocksDB | restores\* | fails explicitly |
+| broadcast-state map key | restores\* | fails explicitly |
+
+\* The type must be eligible in that context ([Keys](#keys)), and its `equals()` and `hashCode()` behavior must be unchanged ([What a snapshot can't see](#what-a-snapshot-cant-see)).
+
+Flink accepts different key-serializer changes in different roles. Its heap backend accepts a `MapState` user-key migration that RocksDB rejects, and broadcast state rejects only an incompatible key ([#25](https://github.com/Lychee-Technology/flinkt/issues/25)). That Flink could restore some broadcast-key changes isn't a reason to promise them. One rule for every role means no key-specific snapshot class, no result that depends on where a serializer is used, and no promise that depends on the backend. There's no key-specific serializer snapshot either. It would add a persisted class and format before anything needs one, and a serializer that already reports every structural change as incompatible leaves nothing for it to enforce.
+
+**How a structural change fails.** Flink rejects `incompatible` in every role. For a partition key, keyed restore throws a `StateMigrationException`. For a value or a `MapState` user key, the failure comes when the state is registered again. For a broadcast key, it comes from `getBroadcastState`. Two paths read restored bytes before any compatibility check: the heap keyed backend, and broadcast state. Both read with the serializer the old snapshot restores (`StateSerializerProvider` and `OperatorStateRestoreOperation`, 2.3.0). On those paths, #5's `restoreSerializer()` fails explicitly when the old schema differs from the current declaration, so no wrong value is read on any backend.
+
+**Later releases.** A later release may add value migrations that read the recorded schemas. Each would be a reviewed decision with old-bytes tests. A key-role migration would also need its own proof that no two old keys become equal and that every key's state is found under the logically equal new key. Flink doesn't migrate partition keys at all.
+
 ## Open questions
 
 These are decided with the serializer implementation, because each one fixes a persisted format:
 
-- **Stable identity.** The logical-ID policy for sealed subtypes and enum constants.
-- **Binary layout.** The null representation, such as a null bitmap, and the encoding of strings and other nested values.
-- **Value classes.** When a value class may use its underlying type's serializer.
-- **Schema evolution.** The evolution matrix, meaning which changes are compatible as-is, after migration, or not at all ([testing.md](testing.md#serializer-snapshot-compatibility)).
+- **Binary layout.** The record layout, the null representation (such as a null bitmap), the encoding of strings and other scalars, the snapshot format, and what `restoreSerializer()` restores ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)). The decisions above constrain it. Snapshots record the full schema, `restoreSerializer()` restores only an identical one, strings are lossless, and each floating-point value has a single encoding on every output view.
+- **Value classes.** When a value class may use its underlying type's serializer ([#18](https://github.com/Lychee-Technology/flinkt/issues/18)). [Schema evolution](#schema-evolution) and [Keys](#keys) already fix two things. Changing the underlying type is incompatible, and a value class is a key only if its representation is deterministic.
 
 These are sequencing questions that don't affect the architecture:
 
