@@ -438,7 +438,7 @@ A later release can then add migrations for state the first release wrote, witho
 
 | Role | Identical schema | Structural change |
 |---|---|---|
-| value: stream record, `ValueState`, `ListState` element, `MapState` value | restores | fails explicitly |
+| value: stream record, keyed `ValueState`, `ListState` element and `MapState` value, operator `ListState` element (list and union) | restores | fails explicitly |
 | `keyBy` partition key | restores\* | fails explicitly |
 | keyed `MapState` user key, heap and RocksDB | restores\* | fails explicitly |
 | broadcast-state map key | restores\* | fails explicitly |
@@ -447,7 +447,13 @@ A later release can then add migrations for state the first release wrote, witho
 
 Flink accepts different key-serializer changes in different roles. Its heap backend accepts a `MapState` user-key migration that RocksDB rejects, and broadcast state rejects only an incompatible key ([#25](https://github.com/Lychee-Technology/flinkt/issues/25)). That Flink could restore some broadcast-key changes isn't a reason to promise them. One rule for every role means no key-specific snapshot class, no result that depends on where a serializer is used, and no promise that depends on the backend. There's no key-specific serializer snapshot either. It would add a persisted class and format before anything needs one, and a serializer that already reports every structural change as incompatible leaves nothing for it to enforce.
 
-**How a structural change fails.** Flink rejects `incompatible` in every role. For a partition key, keyed restore throws a `StateMigrationException`. For a value or a `MapState` user key, the failure comes when the state is registered again. For a broadcast key, it comes from `getBroadcastState`. Two paths read restored bytes before any compatibility check: the heap keyed backend, and broadcast state. Both read with the serializer the old snapshot restores (`StateSerializerProvider` and `OperatorStateRestoreOperation`, 2.3.0). On those paths, #5's `restoreSerializer()` fails explicitly when the old schema differs from the current declaration, so no wrong value is read on any backend.
+**How a structural change fails.** #5's `restoreSerializer()` fails explicitly when the old schema differs from the current declaration. Flink calls it while it restores each state, whether or not the job registers that state again:
+
+- the heap keyed backend reads every state's bytes with it (`StateSerializerProvider` falls back to the old snapshot's `restoreSerializer()`);
+- the RocksDB backend reads no bytes, but while it creates a restored state's column family, its TTL compaction-filter check asks for the state serializer, and gets the same fallback (`RocksDbTtlCompactFiltersManager`, 1.20.5 and 2.3.0);
+- operator state reads every operator `ListState`, list and union, and every broadcast state with it, in one loop (`OperatorStateRestoreOperation`, 2.3.0 source, 1.20.5 and 2.2.1 bytecode).
+
+So a value, a `MapState` user key, an operator `ListState` element and a broadcast key all stop the restore with #5's error, on both backends. Only a partition key reaches Flink's own check first: keyed restore resolves the key serializer's compatibility and throws a `StateMigrationException` for `incompatible`. Flink rejects `incompatible` in the other roles too, when a state is registered again or in `getListState` and `getBroadcastState`, but a changed schema never gets that far. No wrong value is read on any backend. One consequence: a job can't get past a state whose type changed by no longer registering it, because the failure comes from restoring the state, not from registering it.
 
 **Later releases.** A later release may add value migrations that read the recorded schemas. Each would be a reviewed decision with old-bytes tests. A key-role migration would also need its own proof that no two old keys become equal and that every key's state is found under the logically equal new key. Flink doesn't migrate partition keys at all.
 

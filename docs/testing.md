@@ -567,9 +567,10 @@ The result is the same in every role the serializer can have, and each role is t
 | value | restores | fails explicitly |
 | `keyBy` partition key | restores | fails explicitly |
 | keyed `MapState` user key, heap and RocksDB separately | restores | fails explicitly |
+| operator `ListState` element, list and union | restores | fails explicitly |
 | broadcast-state map key | restores | fails explicitly |
 
-"Fails explicitly" means the restore stops with Flink's incompatibility error. On the heap keyed backend and for broadcast state, it can instead stop with the error #5's `restoreSerializer()` raises, because those paths read restored bytes before any compatibility check. Either way it stops before any value is read wrongly or any key's state is filed under another key.
+"Fails explicitly" means the restore stops before any value is read wrongly or any key's state is filed under another key. The error a test expects depends on the role, because Flink calls the old snapshot's `restoreSerializer()` while it restores each state ([How a structural change fails](architecture.md#schema-evolution)). For a partition key it's Flink's incompatibility error, a `StateMigrationException`. In every other role, on the heap and RocksDB backends alike, it's the error #5's `restoreSerializer()` raises. Each role other than the partition key also has a case where the upgraded job no longer registers the changed state, and the restore fails the same way.
 
 For a key, an identical schema is necessary but not sufficient. A changed `equals()` or `hashCode()` breaks a key without any schema difference. The [key tests](#comparator-and-key-semantics) and [savepoint tests](#savepoint-compatibility) cover that, not the snapshot tests.
 
