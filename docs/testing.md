@@ -540,7 +540,8 @@ Every schema transition has an explicit expected result. The first release is st
 | Change | Serializer result |
 |---|---|
 | identical schema | compatible as-is |
-| enum constant or sealed subtype renamed, reordered or moved, with its ID unchanged | compatible as-is: IDs, not names, are compared |
+| enum constant or sealed subtype renamed, reordered or moved, with its ID unchanged | compatible as-is: a rename that keeps its ID is identical |
+| two constants or subtypes swap IDs and both take names the old table doesn't have | compatible as-is: indistinguishable from two renames, which is why an ID is permanent |
 | field appended, inserted or removed | incompatible |
 | field reordered or renamed | incompatible |
 | field type change | incompatible |
@@ -549,6 +550,8 @@ Every schema transition has an explicit expected result. The first release is st
 | collection kind, element, key or value type change | incompatible |
 | enum constant added or removed, or its ID changed | incompatible |
 | sealed subtype added, removed or moved to another level, its ID changed, or its fields changed | incompatible |
+| IDs swapped or rotated among constants or subtypes that keep their names, including sealed subtypes with the same fields | incompatible: a name moved to another ID |
+| a rename that reuses another live constant's or subtype's old name in the same release | incompatible: that name moved to another ID |
 | value-class underlying type change | incompatible |
 | switch between a value class and its underlying type, as `UserId` and `Long` | incompatible, even when the bytes match |
 | type argument change, as `Envelope<User>` to `Envelope<Order>` | incompatible |

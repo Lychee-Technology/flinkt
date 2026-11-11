@@ -478,9 +478,9 @@ enum class Priority {
 }
 ```
 
-Declaration order and ordinals aren't stable. Inserting or reordering a subtype or constant would make old state decode as a different value, with no error. A tag derived from the name would change silently on a rename. An explicit ID survives both, so subtypes and constants can be renamed, reordered or moved between files without changing their bytes. An ID is permanent: don't give a retired ID to a different constant or subtype, because Flinkt can't tell that from a rename.
+Declaration order and ordinals aren't stable. Inserting or reordering a subtype or constant would make old state decode as a different value, with no error. A tag derived from the name would change silently on a rename. An explicit ID survives both, so subtypes and constants can be renamed, reordered or moved between files without changing their bytes. An ID is permanent: don't give it to a different constant or subtype. If that one has a new name, Flinkt can't tell the change from a rename.
 
-A missing or duplicate ID is a compile error. Reading an ID the current code doesn't declare fails, and any change to the set of IDs is incompatible in the first release. Enum constants with bodies, `object` and `data object` subtypes, and nested sealed hierarchies are supported, and each nested level numbers its own subtypes. [Enum and sealed identity](docs/architecture.md#enum-and-sealed-identity) gives the encoding.
+A missing or duplicate ID is a compile error. Reading an ID the current code doesn't declare fails. In the first release, any change to the set of IDs is incompatible, and so is a name that the old state had under another ID, such as two constants that swap IDs. Enum constants with bodies, `object` and `data object` subtypes, and nested sealed hierarchies are supported, and each nested level numbers its own subtypes. [Enum and sealed identity](docs/architecture.md#enum-and-sealed-identity) gives the encoding.
 
 An enum constant, an `object` and a `data object` are written as their ID alone, and reading one returns the constant or singleton of the JVM that reads it. None of its properties are written. So an `object` or `data object` subtype is a stateless marker: a stored property on it is a compile error, and a subtype that carries data is a data class. An enum can declare `val`s, as in `Priority(val weight: Int)`, because every JVM builds them from the declaration. A stored `var` on an enum is a compile error.
 
@@ -615,7 +615,7 @@ The first release is strict. A snapshot whose schema is identical to the current
 - a field added, removed, renamed, reordered or retyped;
 - a nullability change;
 - a changed nested type or collection element;
-- an enum constant or sealed subtype added, removed or given a different ID;
+- an enum constant or sealed subtype added or removed, or one that keeps its name given a different ID;
 - a value class's underlying type;
 - a type argument.
 
