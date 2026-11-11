@@ -282,7 +282,7 @@ typeInfo<User?>()
 typeInfo<Envelope<User>>()
 ```
 
-`typeInfo<String?>()` and `typeInfo<String>()` must differ, and so must the output types of `map { it.takeIf { ... } }` and `map { it }`. A platform type from Java code resolves as non-null, and a test pins that rule. A type Flinkt can't model must fail with an error that names the full Kotlin type, including its arguments and nullability.
+`typeInfo<String?>()` and `typeInfo<String>()` must differ, and so must the output types of `map { it.takeIf { ... } }` and `map { it }`. A platform type from Java code resolves as non-null, and a test pins that rule. `typeOf` returns a different `KType` implementation when `kotlin-reflect` is on the runtime classpath, and the application decides that ([Collections](architecture.md#collections)). So the collection cases run with and without it: `List<T>` accepted, `MutableList<T>` rejected, and a Java platform list resolved as `List<T>`. A type Flinkt can't model must fail with an error that names the full Kotlin type, including its arguments and nullability.
 
 Tests should inspect the semantics that matter to Flink:
 
