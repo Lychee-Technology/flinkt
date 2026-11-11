@@ -33,6 +33,8 @@ Changing the Apache Flink version should normally mean swapping the Flink integr
 4. Flink API differences stay behind version-specific integration boundaries.
 5. API compatibility and persisted-state compatibility are tested separately.
 
+Kotlin compiler support doesn't depend on the Flink line. Every adapter supports the same Kotlin versions ([Kotlin compiler compatibility](kotlin-compatibility.md)).
+
 ## Support policy
 
 Flinkt supports only the Apache Flink release lines that the Apache Flink community still supports.

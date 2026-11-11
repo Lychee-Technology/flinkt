@@ -561,7 +561,7 @@ A type Flinkt can serialize isn't automatically a safe key. Flink picks a partit
 
 The rule is recursive. A data class or value class is a key only if every property is, so one enum property makes a data class usable as a `MapState` user key but not in `keyBy`. A data class that overrides `equals()` or `hashCode()` isn't a key anywhere. Flinkt can't tell whether a hand-written hash code is the same in every JVM, or will stay the same in the next release. Nor is a data class with a `var` constructor property: decoding rebuilds a key through its constructor, where an `init` block can change a `var`, so the restored key might not be the one that was written. An enum's `@FlinkId` makes its bytes stable, but `Enum.hashCode()` is an identity hash code, so an enum isn't a partition key.
 
-Changing the `equals()` or `hashCode()` of a type that already keys persisted state is a breaking change, even when its schema stays the same, and no serializer snapshot can see it. Through the view, adding such an override makes the type ineligible, so the upgraded job fails when its graph is built.
+Changing the `equals()` or `hashCode()` of a type that already keys persisted state is a breaking change, even when its schema stays the same, and no serializer snapshot can see it. The same holds for a Kotlin compiler upgrade that changes the generated `hashCode()`, because the compiler that builds the key class generates it. Flinkt lists a Kotlin version as tested only after its key hashes match the pinned values ([Kotlin compiler compatibility](docs/kotlin-compatibility.md#key-identity-across-compiler-versions)). Through the view, adding such an override makes the type ineligible, so the upgraded job fails when its graph is built.
 
 A rejected key fails when the job graph is built for `keyBy`, or in `open()` for `mapState`. The message names the type, the context and the reason. Two exits skip Flinkt's key checks on purpose: `keyBy` with a `TypeInformation` that Flinkt didn't build, and anything called through `asFlink()`. Flinkt's guarantee is gone there, and Flink's `keyBy` validation doesn't take its place for a Flinkt `TypeInformation`. Flink recognizes only its own type-information classes, such as `EnumTypeInfo`, so `asFlink().keyBy(selector, typeInfo<Priority>())` accepts an enum partition key that both Flinkt and plain Flink reject ([#41](https://github.com/Lychee-Technology/flinkt/issues/41)). `mapStateDescriptor<K, V>()` checks no key rule, because its descriptor may become broadcast state. Nothing checks broadcast-state keys yet, because broadcast is reached through `asFlink()`. [Keys](docs/architecture.md#keys) gives the reasons.
 
@@ -696,6 +696,8 @@ Apache Flink
 ```
 
 The layers are separate because KSP compatibility, public Kotlin APIs, and persisted Flink serializer formats evolve on different timescales. A change to generated source code can be cheap to replace. A change to a serializer format after users have produced checkpoints may not be. [Architecture](docs/architecture.md#layers-and-modules) lists the modules, and [Flink version compatibility](docs/flink-compatibility.md) covers the adapters.
+
+Flinkt requires Kotlin 2.4.0 or later, for code that uses it and for every module that runs its KSP processor. Earlier compilers are unsupported, and the requirement is the same for every Flink adapter. A later Kotlin release is supported once Flinkt's CI has tested it. [Kotlin compiler compatibility](docs/kotlin-compatibility.md) lists the versions, what's tested, and what Flinkt can't enforce.
 
 ---
 

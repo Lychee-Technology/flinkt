@@ -7,12 +7,13 @@
 - the user-facing design (`README.md`);
 - the architecture decisions and their reasons (`docs/architecture.md`);
 - the Flink version policy (`docs/flink-compatibility.md`);
+- the Kotlin compiler policy (`docs/kotlin-compatibility.md`);
 - the test strategy (`docs/testing.md`);
 - contributor rules (`docs/non-code-rules.md`).
 
 It has no source code, build files, or tests yet, so there are no build, lint, or test commands. Don't make them up. When a build is added (`.gitignore` expects Kotlin/Gradle), record the commands here, including how to run a single test.
 
-Read `README.md` and `docs/architecture.md` before you propose or write code. Read `docs/flink-compatibility.md` before you change Flink-facing code or the support matrix. Read `docs/testing.md` before you add tests or CI. It defines the evidence that each compatibility claim needs.
+Read `README.md` and `docs/architecture.md` before you propose or write code. Read `docs/flink-compatibility.md` before you change Flink-facing code or the support matrix. Read `docs/kotlin-compatibility.md` before you change the Kotlin or KSP version, the language or API version, or the key-hash pins. Read `docs/testing.md` before you add tests or CI. It defines the evidence that each compatibility claim needs.
 
 Each rule has one canonical home, and the summary below links to it. When a rule changes, change it there and update this file's summary.
 
@@ -27,6 +28,8 @@ Flinkt is a Kotlin-first layer over Apache Flink APIs. It has three layers: a KS
 **Generated code** implements the Flink-free codec SPI and never subclasses a Flink class. Each adapter owns the `TypeInformation`, `TypeSerializer`, and snapshot classes shared by all generated types. See [architecture.md](docs/architecture.md#generated-code-and-the-adapter).
 
 **Decided type forms.** Collections are `List` and `Map` only. They use one Flinkt-owned encoding as a field and as a top-level type: size, then elements or entries in iteration order. `Set`, `Collection`, the mutable interfaces and arrays fail explicitly, and so does a `Map` key type that has, at any depth, a hand-written `equals()` or `hashCode()`, a data class with a `var` constructor property, or a collection. Enum constants and sealed subtypes carry `@FlinkId`, a positive `Int` written as 4 big-endian bytes, and each nested sealed level has its own ID namespace. An enum constant or object subtype is written as its ID alone, so an object subtype holds no stored state and an enum no `var`. A codec's bytes never depend on the output view it writes to. See [architecture.md](docs/architecture.md#persisted-formats).
+
+**Kotlin compiler.** The minimum supported compiler is Kotlin 2.4.0, for every Flink adapter alike. Earlier versions are unsupported and get no fallback code. A later release is supported only after CI passes with it, including the key-hash pins, because a key's `hashCode()` comes from the compiler that builds the key class and a serializer snapshot can't see it. CI uses two compilers, the pinned build compiler and 2.4.0, not a matrix. Kotlin 1.4.32 is historical evidence of a formula change, not a target. `flinkt-ksp` rejects a language version below 2.4, because KSP2 can't report the real compiler. See [kotlin-compatibility.md](docs/kotlin-compatibility.md).
 
 ## Invariants
 
