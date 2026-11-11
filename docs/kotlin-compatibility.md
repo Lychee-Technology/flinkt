@@ -7,9 +7,9 @@ Kotlin support is independent of the Flink line. Every Flink adapter supports th
 ## Policy summary
 
 1. The minimum supported Kotlin compiler is 2.4.0. It applies to every compilation that uses a Flinkt API or runs `flinkt-ksp`.
-2. Kotlin 1.x and 2.0 through 2.3 are unsupported. Flinkt has no fallback code for them and doesn't test them.
+2. Kotlin 1.x and 2.0 through 2.3 are unsupported. Flinkt has no fallback code for them, and neither CI nor contributors compile, probe or test with them. A question about how an older compiler behaves is out of scope, not open.
 3. A Kotlin release later than the newest tested one isn't supported until a reviewed pull request adds it and CI passes with it, including the key-hash pins. Pre-releases (Beta, RC) are never supported.
-4. A compilation that runs `flinkt-ksp` uses language version 2.4 or later. That is the only form of the compiler requirement that the processor can check ([Enforcement and its limits](#enforcement-and-its-limits)).
+4. `flinkt-ksp` warns when a compilation's language version is below 2.4. That is the only form of the compiler requirement that the processor can see, and it's a warning, not an error, because it can't tell an unsupported compiler from a supported one set to an older language version ([Enforcement and its limits](#enforcement-and-its-limits)).
 5. Serializer compatibility doesn't depend on the compiler. Key identity does, which is why a Kotlin upgrade has to pass the key-hash pins before Flinkt lists it.
 
 ## Support table
@@ -75,15 +75,15 @@ Adopting a new Kotlin release is a reviewed pull request that moves the pinned b
 
 ## Enforcement and its limits
 
-Flinkt can reject most unsupported compilers, but it can't prove which compiler built a user's class. Three mechanisms exist, and each has a gap.
+Flinkt can stop or warn about most unsupported compilers, but it can't prove which compiler built a user's class. Three mechanisms exist, and each has a gap.
 
 - **Kotlin metadata.** Flinkt's classes carry metadata version 2.4.0. Kotlin 2.2.21 refuses to compile against them ("The binary version of its metadata is 2.4.0, expected version is 2.2.0"), unless the user passes `-Xskip-metadata-version-check`. Kotlin 2.3.21 compiles against them without an error or a warning, because a compiler reads metadata one version ahead. So metadata stops 2.2 and earlier, not 2.3.
 - **Gradle.** Gradle module metadata can't express a requirement on the consumer's Kotlin compiler. Flinkt's dependency on `kotlin-stdlib` raises the application's standard library, not its compiler.
-- **The KSP processor.** Under KSP2, `SymbolProcessorEnvironment.compilerVersion` reports the Kotlin version bundled with KSP, 2.4.20 for KSP 2.3.12 and 2.3.13, whatever compiler the build uses. It reported 2.4.20 with the Kotlin Gradle plugin at 2.3.21, 2.4.0, 2.4.21 and 2.5.0-RC alike, so it can't enforce anything. `kotlinVersion` reports the compilation's language version, so `flinkt-ksp` fails the build when it's below 2.4, with a diagnostic naming this policy. That rejects a 2.3 compiler at its default language version. It doesn't reject a 2.3 compiler given `-language-version 2.4`, which Kotlin 2.3.21 accepts with a warning that the language version is experimental. It also rejects a supported 2.4 compiler set to a lower language version, although language version 2.0 on 2.4.20 produced identical key hashes. That's the cost of having a check the processor can run.
+- **The KSP processor.** Under KSP2, `SymbolProcessorEnvironment.compilerVersion` reports the Kotlin version bundled with KSP, 2.4.20 for KSP 2.3.12 and 2.3.13, whatever compiler the build uses. It reported 2.4.20 with the Kotlin Gradle plugin at 2.3.21, 2.4.0, 2.4.21 and 2.5.0-RC alike, so it can't enforce anything. `kotlinVersion` reports the compilation's language version, so `flinkt-ksp` emits a warning when it's below 2.4, naming this policy. That flags a 2.3 compiler at its default language version. It doesn't flag a 2.3 compiler given `-language-version 2.4`, which Kotlin 2.3.21 accepts with a warning that the language version is experimental. It's a warning rather than an error because a supported 2.4 compiler set to a lower language version would trigger it too, and language version 2.0 on 2.4.20 produced identical key hashes. Failing those builds would cost users more than the check is worth. The policy's purpose is to define what Flinkt supports and tests, not to police every build.
 
 A class's `@Metadata` can't identify its compiler either. Its metadata version follows the language version: 2.4.20 with language version 2.0 writes 2.0.0, and 2.3.21 with language version 2.4 writes 2.4.0.
 
-The processor check matters most for keys. Every key class whose hash depends on the Kotlin compiler is a `@FlinkType` data class or value class, so `flinkt-ksp` runs in the compilation that builds it. Built-in keys hash through the JDK. The remaining gap is a key class built by an unsupported compiler that claims a supported language version. The hash pins cover only the compilers CI runs, so nothing would catch a different formula there.
+The warning matters most for keys. Every key class whose hash depends on the Kotlin compiler is a `@FlinkType` data class or value class, so `flinkt-ksp` runs in the compilation that builds it. Built-in keys hash through the JDK. A build that ignores the warning, or a key class built by an unsupported compiler that claims a supported language version, is outside the policy. The hash pins cover only the compilers CI runs, so nothing would catch a different formula there.
 
 ## Open questions
 
