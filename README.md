@@ -443,7 +443,7 @@ Map<UserId, List<Event?>>
 
 Resolving only `T::class.java` is insufficient for these cases because JVM classes alone do not preserve the complete Kotlin type.
 
-The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a `keyBy`, `MapState` or broadcast-state key ([Collections](docs/architecture.md#collections)). Decoding rebuilds a `Map`'s keys and keeps no object identity, so a `Map` key type with a hand-written `equals()` or `hashCode()`, at any depth, fails explicitly ([Map keys](docs/architecture.md#map-keys)).
+The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a `keyBy`, `MapState` or broadcast-state key ([Collections](docs/architecture.md#collections)). Decoding rebuilds a `Map`'s keys and keeps no object identity, so a `Map` key type fails explicitly if, at any depth, it has a hand-written `equals()` or `hashCode()` or a data class with a `var` constructor property ([Map keys](docs/architecture.md#map-keys)).
 
 ---
 
@@ -559,7 +559,7 @@ A type Flinkt can serialize isn't automatically a safe key. Flink picks a partit
 
 \* Once a restore test in a second JVM confirms it ([Eligibility](docs/architecture.md#eligibility)).
 
-The rule is recursive. A data class or value class is a key only if every property is, so one enum property makes a data class usable as a `MapState` user key but not in `keyBy`. A data class that overrides `equals()` or `hashCode()` isn't a key anywhere. Flinkt can't tell whether a hand-written hash code is the same in every JVM, or will stay the same in the next release. An enum's `@FlinkId` makes its bytes stable, but `Enum.hashCode()` is an identity hash code, so an enum isn't a partition key.
+The rule is recursive. A data class or value class is a key only if every property is, so one enum property makes a data class usable as a `MapState` user key but not in `keyBy`. A data class that overrides `equals()` or `hashCode()` isn't a key anywhere. Flinkt can't tell whether a hand-written hash code is the same in every JVM, or will stay the same in the next release. Nor is a data class with a `var` constructor property: decoding rebuilds a key through its constructor, where an `init` block can change a `var`, so the restored key might not be the one that was written. An enum's `@FlinkId` makes its bytes stable, but `Enum.hashCode()` is an identity hash code, so an enum isn't a partition key.
 
 Changing the `equals()` or `hashCode()` of a type that already keys persisted state is a breaking change, even when its schema stays the same, and no serializer snapshot can see it. Through the view, adding such an override makes the type ineligible, so the upgraded job fails when its graph is built.
 
