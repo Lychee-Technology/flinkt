@@ -28,6 +28,7 @@ This is the target for ordinary persisted values: stream records, `ValueState` v
 | identical schema | `compatibleAsIs` |
 | source declaration reorder, persisted layout unchanged | `compatibleAsIs` |
 | enum constant or sealed subtype renamed, reordered or moved, ID unchanged | `compatibleAsIs` |
+| two constants or subtypes swap IDs and both take names the old table doesn't have | `compatibleAsIs`: indistinguishable from two renames, so an ID is permanent |
 | field removed | `compatibleAfterMigration` |
 | field added, with a defined migration default | `compatibleAfterMigration` |
 | field added, without a legal migration default | `incompatible` |
@@ -39,6 +40,7 @@ This is the target for ordinary persisted values: stream records, `ValueState` v
 | collection kind change | `incompatible` |
 | structural change under a `Map` key | `incompatible` |
 | enum constant or sealed subtype added or removed, or its ID changed | `incompatible` |
+| a name that the old ID table has under another ID: IDs swapped or rotated among constants or subtypes that keep their names, or a rename that reuses another live name | `incompatible` |
 
 Results compose like Flink's composite serializers do. Any incompatible child makes the parent incompatible. Otherwise any child that migrates makes the parent migrate. The parent is as-is only when every child is and its own layout is unchanged. So `User.address` migrates when `Address(city, zip)` becomes `Address(city)`.
 
