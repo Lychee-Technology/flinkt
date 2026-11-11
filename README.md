@@ -443,7 +443,7 @@ Map<UserId, List<Event?>>
 
 Resolving only `T::class.java` is insufficient for these cases because JVM classes alone do not preserve the complete Kotlin type.
 
-The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a key ([Collections](docs/architecture.md#collections)).
+The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a `keyBy`, `MapState` or broadcast-state key ([Collections](docs/architecture.md#collections)). Decoding rebuilds a `Map`'s keys and keeps no object identity, so a `Map` key type with a hand-written `equals()` or `hashCode()`, at any depth, fails explicitly ([Map keys](docs/architecture.md#map-keys)).
 
 ---
 
