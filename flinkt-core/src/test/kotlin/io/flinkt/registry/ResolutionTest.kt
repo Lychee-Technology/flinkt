@@ -20,8 +20,12 @@ import io.flinkt.example.User
 import io.flinkt.example.UserCodec
 import io.flinkt.example.UserCodecFactory
 import io.flinkt.example.UserId
+import io.flinkt.schema.FieldSchema
 import io.flinkt.schema.RecordSchema
-import io.flinkt.types.BuiltInKind
+import io.flinkt.schema.SchemaType
+import io.flinkt.schema.ValueClassSchema
+import io.flinkt.types.FlinktType
+import io.flinkt.types.TypeShape
 import io.flinkt.types.UnsupportedTypeException
 import io.flinkt.types.kTypeOf
 import java.io.ByteArrayInputStream
@@ -31,7 +35,9 @@ import java.io.DataOutputStream
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -80,7 +86,7 @@ class ResolutionTest {
                         kept = context
                         PlainCodec
                     }
-                    registry.registerBuiltIn(BuiltInKind.INT) { IntCodec }
+                    registry.registerBuiltIn(Int::class) { IntCodec }
                 }
             },
         )
@@ -165,7 +171,65 @@ class ResolutionTest {
 
         assertSame(UserCodec, TypeRegistry.of(StandInTypes()).codec(model))
         val error = assertThrows<UnsupportedTypeException> { TypeRegistry.of(StandInBuiltIns()).codec(model) }
-        assertContains(error.message, "no GeneratedTypeModule that this registry found registers it")
+        assertContains(error.message, "it's annotated with @FlinkType, but no GeneratedTypeModule that this registry found registers it")
+        assertFalse("another class loader" in error.message!!, error.message)
+    }
+
+    @Test
+    fun `a model built without a declaration resolves with this registry's declaration`() {
+        val bare = TypeRegistry.of(StandInBuiltIns())
+        val model = bare.model<User>()
+        assertEquals(TypeShape.ClassifierOnly, model.shape)
+
+        assertSame(UserCodec, registry.codec(model))
+        assertInstanceOf(OrderCodec::class.java, registry.codec(bare.model<Order>()))
+    }
+
+    @Test
+    fun `a model's schema from another registry doesn't select a declaration this registry doesn't support`() {
+        val record = TypeRegistry.of(module { it.register(Plain::class, plainSchema("id")) { PlainCodec } })
+        val model = record.model<Plain>()
+        val generic = TypeRegistry.of(
+            module { it.register(Plain::class, RecordSchema(Plain::class.java.name, emptyList(), listOf("T"))) { error("unsupported") } },
+        )
+        val valueClass = TypeRegistry.of(
+            module { it.register(Plain::class, ValueClassSchema(Plain::class.java.name, FieldSchema("id", LONG))) { error("unsupported") } },
+        )
+
+        assertSame(PlainCodec, record.codec(model))
+        val plain = Plain::class.java.name
+        assertContains(assertThrows<UnsupportedTypeException> { generic.codec(model) }.message, "$plain: generic classes aren't supported yet")
+        assertContains(assertThrows<UnsupportedTypeException> { valueClass.codec(model) }.message, "$plain: value classes aren't supported yet")
+    }
+
+    @Test
+    fun `a factory gets the model with its own registry's schema`() {
+        val own = plainSchema("key")
+        var seen: FlinktType? = null
+        val receiving = TypeRegistry.of(
+            module {
+                it.register(Plain::class, own) { context ->
+                    seen = context.type
+                    PlainCodec
+                }
+            },
+        )
+        val sending = TypeRegistry.of(module { it.register(Plain::class, plainSchema("id")) { PlainCodec } })
+
+        assertSame(PlainCodec, receiving.codec(sending.model<Plain>()))
+        assertEquals(TypeShape.Generated(own), seen!!.shape)
+    }
+
+    @Test
+    fun `a model is reconciled at every depth, and a model of this registry is kept as it is`() {
+        val bare = TypeRegistry.of(StandInBuiltIns())
+        val foreign = bare.model<Map<Long, Envelope<List<User?>>>>()
+        val own = registry.model<Map<Long, Envelope<List<User?>>>>()
+        assertNotEquals(own, foreign)
+
+        assertEquals(own, registry.reconcile(foreign))
+        assertEquals(foreign, bare.reconcile(own))
+        assertSame(own, registry.reconcile(own))
     }
 
     private fun assertUnsupported(type: KType, expected: String) {
@@ -175,6 +239,16 @@ class ResolutionTest {
     }
 
     private fun <T> typeParameter(): KType = typeOf<List<T>>().arguments.single().type!!
+
+    private fun plainSchema(field: String) = RecordSchema(Plain::class.java.name, listOf(FieldSchema(field, LONG)))
+
+    private fun module(body: (MutableTypeRegistry) -> Unit) = object : GeneratedTypeModule {
+        override fun register(registry: MutableTypeRegistry) = body(registry)
+    }
+
+    private companion object {
+        val LONG = SchemaType.ClassType("kotlin.Long")
+    }
 
     private object PlainCodec : GeneratedCodec<Plain> {
         override fun serialize(value: Plain, output: java.io.DataOutput): Unit = output.writeLong(value.id)

@@ -16,7 +16,6 @@ import io.flinkt.schema.SchemaTypeArgument
 import io.flinkt.schema.SealedSchema
 import io.flinkt.schema.SealedSubtypeSchema
 import io.flinkt.schema.ValueClassSchema
-import io.flinkt.types.BuiltInKind
 import java.io.DataInput
 import java.io.DataOutput
 import java.util.concurrent.atomic.AtomicInteger
@@ -187,8 +186,8 @@ class StandInTypes : GeneratedTypeModule {
 /** Stand-in codecs for two built-in types. Flinkt's core registers none, because their bytes are #5's. */
 class StandInBuiltIns : GeneratedTypeModule {
     override fun register(registry: MutableTypeRegistry) {
-        registry.registerBuiltIn(BuiltInKind.INT, CodecFactory { IntCodec })
-        registry.registerBuiltIn(BuiltInKind.STRING, CodecFactory { StringCodec })
+        registry.registerBuiltIn(Int::class, CodecFactory { IntCodec })
+        registry.registerBuiltIn(String::class, CodecFactory { StringCodec })
     }
 }
 

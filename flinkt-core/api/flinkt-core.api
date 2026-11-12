@@ -31,7 +31,7 @@ public abstract interface class io/flinkt/registry/GeneratedTypeModule {
 
 public abstract interface class io/flinkt/registry/MutableTypeRegistry {
 	public abstract fun register (Lkotlin/reflect/KClass;Lio/flinkt/schema/DeclarationSchema;Lio/flinkt/codec/CodecFactory;)V
-	public abstract fun registerBuiltIn (Lio/flinkt/types/BuiltInKind;Lio/flinkt/codec/CodecFactory;)V
+	public abstract fun registerBuiltIn (Lkotlin/reflect/KClass;Lio/flinkt/codec/CodecFactory;)V
 }
 
 public final class io/flinkt/registry/TypeRegistry {

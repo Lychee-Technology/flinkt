@@ -3,7 +3,6 @@ package io.flinkt.registry
 import io.flinkt.codec.CodecContext
 import io.flinkt.codec.CodecFactory
 import io.flinkt.codec.GeneratedCodec
-import io.flinkt.schema.DeclarationSchema
 import io.flinkt.schema.EnumSchema
 import io.flinkt.schema.ObjectSchema
 import io.flinkt.schema.RecordSchema
@@ -32,7 +31,7 @@ internal class Resolution(private val registry: TypeRegistry) {
         return when (val shape = type.shape) {
             is TypeShape.BuiltIn -> builtIn(type, shape.kind)
             is TypeShape.Collection -> unsupported(type, collectionReason(shape.kind))
-            is TypeShape.Generated -> generated(type, shape.schema)
+            is TypeShape.Generated -> generated(type)
             TypeShape.ClassifierOnly -> unsupported(type, registry.unmodeledReason(type))
             TypeShape.TypeParameter -> unsupported(
                 type,
@@ -48,16 +47,20 @@ internal class Resolution(private val registry: TypeRegistry) {
         return create(type, registration.codecFactory)
     }
 
-    private fun generated(type: FlinktType, schema: DeclarationSchema): GeneratedCodec<*> {
-        when (schema) {
+    /**
+     * A generated declaration. The schema that decides support and the factory are this registry's registration of
+     * the class, the same one, so a schema from anywhere else can't select a factory.
+     */
+    private fun generated(type: FlinktType): GeneratedCodec<*> {
+        val declaration = registry.declaration(checkNotNull(type.jvmClass))
+            ?: unsupported(type, registry.unmodeledReason(type))
+        when (val schema = declaration.schema) {
             is RecordSchema -> if (schema.typeParameters.isNotEmpty()) unsupported(type, "generic classes aren't supported yet")
             is ValueClassSchema -> unsupported(type, "value classes aren't supported yet")
             is EnumSchema -> unsupported(type, "enums aren't supported yet")
             is SealedSchema -> unsupported(type, "sealed types aren't supported yet")
             is ObjectSchema -> unsupported(type, "objects aren't supported yet")
         }
-        val declaration = registry.declaration(checkNotNull(type.jvmClass))
-            ?: unsupported(type, registry.unmodeledReason(type))
         return create(type, declaration.codecFactory)
     }
 

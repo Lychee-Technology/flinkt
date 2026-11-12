@@ -31,10 +31,13 @@ public interface MutableTypeRegistry {
     public fun <T : Any> register(type: KClass<T>, schema: DeclarationSchema, codecFactory: CodecFactory<T>)
 
     /**
-     * Registers the codec of a built-in type.
+     * Registers the codec of a built-in type, one of [BuiltInKind]'s, named by its Kotlin class, such as `Int::class`.
      *
-     * Flinkt's core doesn't hard-code one, because how each scalar is written is a format decision (#5) that the
-     * generated codecs have to agree with.
+     * The class and the factory have the same type argument, so a factory for another type doesn't compile, and
+     * `codec<Int>()` can't return a codec of something else. A class that isn't a built-in type fails the registry.
+     *
+     * Flinkt's core doesn't hard-code a built-in's codec, because how each scalar is written is a format decision (#5)
+     * that the generated codecs have to agree with.
      */
-    public fun <T : Any> registerBuiltIn(kind: BuiltInKind, codecFactory: CodecFactory<T>)
+    public fun <T : Any> registerBuiltIn(type: KClass<T>, codecFactory: CodecFactory<T>)
 }

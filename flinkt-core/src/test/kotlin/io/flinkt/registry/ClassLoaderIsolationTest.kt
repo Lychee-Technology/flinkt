@@ -66,6 +66,12 @@ class ClassLoaderIsolationTest {
         val error = assertThrows<UnsupportedTypeException> { first.registry.codec(second.userType) }
         assertEquals("com.example.User", error.canonicalType)
         assertContains(error.message, "this registry has a class of that name from another class loader")
+
+        // The other registry's model of its User carries that registry's schema, and still isn't this registry's.
+        val foreign = second.registry.model(second.userType)
+        assertEquals(TypeShape.Generated(second.registry.declarations.single().schema), foreign.shape)
+        val transferred = assertThrows<UnsupportedTypeException> { first.registry.codec(foreign) }
+        assertContains(transferred.message, "this registry has a class of that name from another class loader")
     }
 
     @Test

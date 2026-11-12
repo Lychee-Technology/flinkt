@@ -1,5 +1,7 @@
 package io.flinkt.schema
 
+import io.flinkt.immutableCopy
+
 /**
  * The structure of one generated declaration, as its `GeneratedTypeModule` registers it: what a serializer snapshot
  * needs to describe the declaration, and what a planner and an old-layout reader work on.
@@ -31,8 +33,8 @@ public class RecordSchema(
     fields: List<FieldSchema>,
     typeParameters: List<String> = emptyList(),
 ) : DeclarationSchema() {
-    public val fields: List<FieldSchema> = fields.toList()
-    override val typeParameters: List<String> = typeParameters.toList()
+    public val fields: List<FieldSchema> = fields.immutableCopy()
+    override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
         validate(typeName, this.typeParameters)
@@ -78,7 +80,7 @@ public class ValueClassSchema(
     public val underlying: FieldSchema,
     typeParameters: List<String> = emptyList(),
 ) : DeclarationSchema() {
-    override val typeParameters: List<String> = typeParameters.toList()
+    override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
         validate(typeName, this.typeParameters)
@@ -103,7 +105,7 @@ public class EnumSchema(
     /** The constants, in declaration order. */
     constants: List<EnumConstantSchema>,
 ) : DeclarationSchema() {
-    public val constants: List<EnumConstantSchema> = constants.toList()
+    public val constants: List<EnumConstantSchema> = constants.immutableCopy()
     override val typeParameters: List<String> get() = emptyList()
 
     init {
@@ -148,8 +150,8 @@ public class SealedSchema(
     subtypes: List<SealedSubtypeSchema>,
     typeParameters: List<String> = emptyList(),
 ) : DeclarationSchema() {
-    public val subtypes: List<SealedSubtypeSchema> = subtypes.toList()
-    override val typeParameters: List<String> = typeParameters.toList()
+    public val subtypes: List<SealedSubtypeSchema> = subtypes.immutableCopy()
+    override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
         validate(typeName, this.typeParameters)

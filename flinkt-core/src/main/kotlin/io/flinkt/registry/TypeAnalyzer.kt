@@ -31,6 +31,26 @@ internal class TypeAnalyzer(private val declarationOf: (Class<*>) -> TypeShape.G
         }
     }
 
+    /**
+     * [type], which another registry may have built, with the shape of each class at every depth taken from
+     * [declarationOf], as [analyze] would give it here. Only a generated declaration's shape depends on the registry:
+     * a built-in, a collection or a type parameter is the same everywhere, so it's kept. Returns [type] itself when
+     * nothing changes.
+     */
+    fun reconcile(type: FlinktType): FlinktType {
+        val arguments = type.arguments.map { argument ->
+            val argumentType = argument.type ?: return@map argument
+            val reconciled = reconcile(argumentType)
+            if (reconciled === argumentType) argument else TypeArgument(argument.variance, reconciled)
+        }
+        val shape = when (type.shape) {
+            is TypeShape.Generated, TypeShape.ClassifierOnly -> declarationOf(checkNotNull(type.jvmClass)) ?: TypeShape.ClassifierOnly
+            else -> type.shape
+        }
+        val unchanged = shape == type.shape && arguments.indices.all { arguments[it] === type.arguments[it] }
+        return if (unchanged) type else FlinktType(type.classifierName, type.jvmClass, arguments, type.isNullable, shape)
+    }
+
     private fun argument(projection: KTypeProjection): TypeArgument {
         val variance = projection.variance ?: return TypeArgument.STAR
         return TypeArgument(variance, analyze(checkNotNull(projection.type)))

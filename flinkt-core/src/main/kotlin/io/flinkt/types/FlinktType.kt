@@ -1,5 +1,6 @@
 package io.flinkt.types
 
+import io.flinkt.immutableCopy
 import kotlin.reflect.KVariance
 
 /**
@@ -33,16 +34,18 @@ public class FlinktType internal constructor(
      * class loaders are two types.
      */
     public val jvmClass: Class<*>?,
-    /** The type arguments, in the order of the classifier's type parameters. */
-    public val arguments: List<TypeArgument>,
+    arguments: List<TypeArgument>,
     /** Whether the type is marked nullable, as in `User?`. A platform type from Java isn't. */
     public val isNullable: Boolean,
     /** What Flinkt knows about the classifier. */
     public val shape: TypeShape,
 ) {
+    /** The type arguments, in the order of the classifier's type parameters. The list can't be changed. */
+    public val arguments: List<TypeArgument> = arguments.immutableCopy()
+
     private val canonical: String = buildString {
         append(classifierName)
-        if (arguments.isNotEmpty()) arguments.joinTo(this, ", ", "<", ">")
+        if (this@FlinktType.arguments.isNotEmpty()) this@FlinktType.arguments.joinTo(this, ", ", "<", ">")
         if (isNullable) append('?')
     }
 

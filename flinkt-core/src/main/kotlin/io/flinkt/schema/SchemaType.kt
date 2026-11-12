@@ -1,5 +1,6 @@
 package io.flinkt.schema
 
+import io.flinkt.immutableCopy
 import kotlin.reflect.KVariance
 
 /**
@@ -27,7 +28,7 @@ public sealed class SchemaType {
         arguments: List<SchemaTypeArgument> = emptyList(),
         override val isNullable: Boolean = false,
     ) : SchemaType() {
-        public val arguments: List<SchemaTypeArgument> = arguments.toList()
+        public val arguments: List<SchemaTypeArgument> = arguments.immutableCopy()
 
         init {
             require(name.isNotEmpty()) { "A class type needs a name" }

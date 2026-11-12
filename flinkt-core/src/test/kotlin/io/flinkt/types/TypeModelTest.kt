@@ -1,5 +1,6 @@
 package io.flinkt.types
 
+import io.flinkt.assertImmutable
 import io.flinkt.example.Color
 import io.flinkt.example.Envelope
 import io.flinkt.example.Event
@@ -89,6 +90,18 @@ class TypeModelTest {
         assertEquals(first, second)
         assertEquals(first.hashCode(), second.hashCode())
         assertEquals(registry.model<Envelope<User>>(), TypeRegistry.of(StandInTypes()).model<Envelope<User>>())
+    }
+
+    @Test
+    fun `a model's arguments can't be changed at any depth`() {
+        val model = registry.model<Map<Long, List<User?>>>()
+        val canonical = "kotlin.collections.Map<kotlin.Long, kotlin.collections.List<$user?>>"
+
+        assertImmutable(model.arguments)
+        assertImmutable(model.arguments[1].type!!.arguments)
+        assertEquals(canonical, model.toString())
+        assertEquals(registry.model<Map<Long, List<User?>>>(), model)
+        assertEquals(registry.model<Map<Long, List<User?>>>().hashCode(), model.hashCode())
     }
 
     @Test

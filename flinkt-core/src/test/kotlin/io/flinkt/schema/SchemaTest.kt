@@ -1,7 +1,11 @@
 package io.flinkt.schema
 
+import io.flinkt.assertImmutable
+import io.flinkt.example.StandInTypes
+import io.flinkt.example.User
 import io.flinkt.example.listOfNullableUsers
 import io.flinkt.example.userSchema
+import io.flinkt.registry.TypeRegistry
 import kotlin.reflect.KVariance
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -97,6 +101,41 @@ class SchemaTest {
         assertNotEquals(userId, orderId)
         assertEquals("value class com.example.UserId(value: kotlin.Long)", userId.toString())
         assertEquals("object com.example.Shutdown", ObjectSchema("com.example.Shutdown").toString())
+    }
+
+    @Test
+    fun `a schema's lists are copies that can't be changed after validation`() {
+        val fields = mutableListOf(FieldSchema("id", long), FieldSchema("history", listOfNullableUsers))
+        val typeParameters = mutableListOf("T", "U")
+        val record = RecordSchema("com.example.Pair", fields, typeParameters)
+        fields.clear()
+        typeParameters.clear()
+        assertEquals("record com.example.Pair<T, U>(id: kotlin.Long, history: kotlin.collections.List<io.flinkt.example.User?>)", record.toString())
+
+        assertImmutable(record.fields)
+        assertImmutable(record.typeParameters)
+        assertImmutable((record.fields[1].type as SchemaType.ClassType).arguments)
+        assertImmutable(listOfNullableUsers.arguments)
+        assertImmutable(ValueClassSchema("com.example.Box", FieldSchema("value", SchemaType.TypeParameter("T")), listOf("T")).typeParameters)
+        assertImmutable(EnumSchema("com.example.Color", listOf(EnumConstantSchema("RED", 1), EnumConstantSchema("BLUE", 2))).constants)
+        val created = SealedSubtypeSchema(1, SchemaType.ClassType("com.example.Created", listOf(SchemaTypeArgument.invariant(SchemaType.TypeParameter("T")))))
+        val event = SealedSchema("com.example.Event", listOf(created, SealedSubtypeSchema(2, SchemaType.ClassType("com.example.Shutdown"))), listOf("T"))
+        assertImmutable(event.subtypes)
+        assertImmutable(event.typeParameters)
+        assertImmutable(event.subtypes[0].type.arguments)
+        assertEquals("sealed com.example.Event<T> { 1 = com.example.Created<T>, 2 = com.example.Shutdown }", event.toString())
+    }
+
+    @Test
+    fun `a registered schema can't be changed through the registry`() {
+        val registry = TypeRegistry.of(StandInTypes())
+        val schema = registry.declaration(User::class)!!.schema as RecordSchema
+
+        assertImmutable(schema.fields)
+        assertEquals(userSchema, registry.declaration(User::class)!!.schema)
+        assertEquals(listOf("id", "name"), schema.fields.map { it.name })
+        assertImmutable(registry.declarations)
+        assertImmutable(registry.modules)
     }
 
     private fun assertMessage(expected: String, block: () -> Unit) {

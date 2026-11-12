@@ -61,18 +61,26 @@ public class TypeRegistry private constructor(
      * This release resolves the built-in types whose codecs a module registers, and non-null, non-generic generated
      * records whose fields it can resolve. Every other type is modeled but fails with `UnsupportedTypeException`,
      * whose message names the canonical type and the reason.
+     *
+     * [type] may come from another registry. It's resolved as this registry models the same classes, arguments and
+     * nullability: each generated declaration, at every depth, is this registry's own declaration of that class,
+     * schema and factory alike, and a class this registry has no declaration for is known by its classifier only.
+     * The shape another registry gave a class doesn't decide anything here.
      */
-    public fun codec(type: FlinktType): GeneratedCodec<*> = Resolution(this).resolve(type)
+    public fun codec(type: FlinktType): GeneratedCodec<*> = Resolution(this).resolve(reconcile(type))
 
     /** Supported resolution of a `KType`: [codec] of its [model]. */
-    public fun codec(type: KType): GeneratedCodec<*> = codec(model(type))
+    public fun codec(type: KType): GeneratedCodec<*> = Resolution(this).resolve(model(type))
+
+    /** [type], which any registry may have built, as this registry models it. */
+    internal fun reconcile(type: FlinktType): FlinktType = analyzer.reconcile(type)
 
     internal fun builtIn(kind: BuiltInKind): BuiltInRegistration? = builtIns[kind]
 
     /** Why [type], a class without a codec in this registry, isn't resolved. */
     internal fun unmodeledReason(type: FlinktType): String {
         val jvmClass = checkNotNull(type.jvmClass)
-        val sameName = generated.keys.firstOrNull { it.name == jvmClass.name }
+        val sameName = generated.keys.firstOrNull { it.name == jvmClass.name && it != jvmClass }
         return when {
             sameName != null ->
                 "this registry has a class of that name from another class loader (${sameName.classLoader}), " +
@@ -152,8 +160,13 @@ public class TypeRegistry private constructor(
                 generated[jvmClass] = GeneratedDeclaration(type, schema, codecFactory, module)
             }
 
-            override fun <T : Any> registerBuiltIn(kind: BuiltInKind, codecFactory: CodecFactory<T>) {
+            override fun <T : Any> registerBuiltIn(type: KClass<T>, codecFactory: CodecFactory<T>) {
                 checkOpen()
+                val kind = BuiltInKind.entries.firstOrNull { it.jvmClass == type.javaObjectType }
+                    ?: throw RegistrationException(
+                        "${describe(module)} registers a built-in codec for ${type.javaObjectType.name}, which isn't a " +
+                            "built-in type. The built-in types are ${BuiltInKind.entries.joinToString { it.kotlinName }}",
+                    )
                 builtIns[kind]?.let { existing ->
                     throw RegistrationException(twice("the built-in type ${kind.kotlinName}", existing.module, module))
                 }
