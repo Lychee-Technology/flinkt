@@ -1,0 +1,48 @@
+# PR CI: the pull-request tier of docs/testing.md#ci-tiers. Merge, nightly and release tiers come later.
+# Each lane is one Gradle command, so a module's new tests join a lane without a change here.
+name: PR
+
+on:
+  pull_request:
+  # Runs on main too, so main shows the same status and setup-gradle can save the dependency cache that pull
+  # requests read.
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  primary:
+    # The primary adapter is the one for the newest Flink line that has an adapter (docs/testing.md#pull-requests).
+    name: Build and tests, Flink 2.3 primary adapter
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17 # the build's toolchain JDK, `jdk` in gradle/libs.versions.toml
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Build, and run every module's checks except the 1.20 adapter's
+        run: ./gradlew build -x :flinkt-flink120:check
+
+  flink120:
+    name: Flink 1.20 compile lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Compile the shared adapter source against Flink 1.20, and run its tests without a MiniCluster
+        run: ./gradlew :flinkt-flink120:check -Pflinkt.test.excludeTags=minicluster

@@ -2,7 +2,7 @@
 
 ## Project state
 
-**Flinkt** is in the design stage. The repository contains:
+**Flinkt** is in the design stage, with a build but no features yet. The repository contains:
 
 - the user-facing design (`README.md`);
 - the architecture decisions and their reasons (`docs/architecture.md`);
@@ -10,13 +10,37 @@
 - the Flink version policy (`docs/flink-compatibility.md`);
 - the Kotlin compiler policy (`docs/kotlin-compatibility.md`);
 - the test strategy (`docs/testing.md`);
+- the build: modules, toolchain, pinned versions, build checks and CI lanes (`docs/build.md`);
 - contributor rules (`docs/non-code-rules.md`).
 
-It has no source code, build files, or tests yet, so there are no build, lint, or test commands. Don't make them up. When a build is added (`.gitignore` expects Kotlin/Gradle), record the commands here, including how to run a single test.
+The Gradle build has the planned modules, `flinkt-core`, `flinkt-ksp`, `flinkt-view-codegen`, `flinkt-flink23` and `flinkt-flink120`, plus the internal `test-support`. Their production code is only what the build checks need. There's no linter or formatter.
 
-Read `README.md` and `docs/architecture.md` before you propose or write code. Read `docs/schema-evolution.md` before you touch a persisted format, a serializer snapshot or restore. Read `docs/flink-compatibility.md` before you change Flink-facing code or the support matrix. Read `docs/kotlin-compatibility.md` before you change the Kotlin or KSP version, the language or API version, or the key-hash checks. Read `docs/testing.md` before you add tests or CI. It defines the evidence that each compatibility claim needs.
+Read `README.md` and `docs/architecture.md` before you propose or write code. Read `docs/schema-evolution.md` before you touch a persisted format, a serializer snapshot or restore. Read `docs/flink-compatibility.md` before you change Flink-facing code or the support matrix. Read `docs/kotlin-compatibility.md` before you change the Kotlin or KSP version, the language or API version, or the key-hash checks. Read `docs/testing.md` before you add tests or CI. It defines the evidence that each compatibility claim needs. Read `docs/build.md` before you change the build, a pinned version, the module layout or the CI lanes.
 
 Each rule has one canonical home, and the summary below links to it. When a rule changes, change it there and update this file's summary.
+
+## Build and test
+
+Gradle, through the wrapper. A machine without JDK 17 gets one automatically (Foojay).
+
+```sh
+./gradlew build                                            # compile, test and check every module and the build logic
+./gradlew :build-logic:test                                # the build logic's own tests
+./gradlew :flinkt-core:test                                # one module's tests
+./gradlew :test-support:test --tests 'io.flinkt.testing.compile.KotlinCompilationTest'   # one test class
+./gradlew :test-support:test --tests '*KotlinCompilationTest.warnings*'                  # one test method
+./gradlew :flinkt-flink120:test --tests 'io.flinkt.flink.AdapterCompileTest'             # a shared adapter test on one line
+./gradlew updateKotlinAbi                                  # rewrite the ABI dumps after an intended API change
+```
+
+PR CI runs two lanes ([build.md](docs/build.md#pr-ci)): `./gradlew build -x :flinkt-flink120:check`, and `./gradlew :flinkt-flink120:check -Pflinkt.test.excludeTags=minicluster`.
+
+- **Versions** are pinned in `gradle/libs.versions.toml`: JDK 17, Kotlin 2.4.21 as the build compiler, 2.4.0 as the minimum, KSP 2.3.13, Flink 2.3.0 and 1.20.5. No dynamic selectors. ([build.md](docs/build.md#pinned-versions))
+- **Published classes** target Java 8, because Flink 1.20 still runs on it, and compile with language and API version 2.4 against `kotlin-stdlib` 2.4.0. ([build.md](docs/build.md#toolchain))
+- **Adapters** compile `adapters/shared/src` plus their own `src`, which holds only what can't compile on another line. Flink is `compileOnly`, and the line's Flink is on the test classpath. ([build.md](docs/build.md#adapters))
+- **`check` fails** on a public ABI that differs from the module's `api/*.api` dump, on a declaration without explicit visibility in a published module, and when `checkDependencyBoundaries` finds Flink in `flinkt-core` or on a published runtime classpath, or `flinkt-ksp` or `flinkt-view-codegen` on one. A file dependency fails every boundary on its classpath, because it has no coordinates to check. ([build.md](docs/build.md#dependency-boundaries))
+- **Compile tests** use `:test-support`: `exactTypeOf(x).shouldBe<T>()` for exact static types, and `KotlinCompilation(KotlinCompiler.BUILD or MINIMUM).compile(code)` with `assertSuccess()` or `assertFailure(...)` for code that must or mustn't compile, optionally with a KSP processor. Match diagnostic names and the wording both compilers share. Don't build another harness. ([build.md](docs/build.md#compile-test-harness))
+- **Tag a MiniCluster test** `@Tag("minicluster")`. The 1.20 PR lane skips it.
 
 ## Architecture (planned)
 
