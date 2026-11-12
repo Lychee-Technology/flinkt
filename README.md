@@ -368,9 +368,9 @@ data class User(
 
 gives the processor enough information to generate a serializer without discovering nullability at runtime.
 
-A compact null bitmap is one possible binary representation, but the exact representation is a state-compatibility decision rather than an API detail.
+The planned representation is one null bitmap per record for its nullable fields, which a record without nullable fields doesn't carry, and a marker in front of a top-level nullable value. Its exact bytes are a state-compatibility decision ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)), not an API detail.
 
-Changing `String` to `String?` must not be declared compatible merely because both types use the same JVM class.
+Changing `String` to `String?` must not be declared compatible merely because both types use the same JVM class. It's a type change, and incompatible with persisted state.
 
 ---
 
@@ -387,7 +387,7 @@ value class UserId(
 )
 ```
 
-may be represented by its underlying `Long` serializer when that representation is safe.
+may be written with exactly the bytes of its underlying `Long` when that representation is safe.
 
 This allows:
 
@@ -399,7 +399,7 @@ PaymentId
 
 to remain distinct application types without forcing generic serialization for each wrapper.
 
-Changing a value class's underlying type is incompatible with previously persisted state in the first release. So is switching a field between `UserId` and `Long`, even if the bytes would match ([Schema and state compatibility](#schema-and-state-compatibility)). A value class over an eligible type, such as `UserId`, can be a key ([Keys](#keys)).
+The bytes carry no wrapper, but the serializer snapshot records it, so `Long`, `UserId` and `OrderId` stay different schemas. Changing a value class's underlying type is incompatible with previously persisted state. So is switching a field between `UserId` and `Long`, even though the bytes match ([Schema and state compatibility](#schema-and-state-compatibility)). A value class over an eligible type, such as `UserId`, can be a key ([Keys](#keys)). Which value classes use this representation is still being decided ([#18](https://github.com/Lychee-Technology/flinkt/issues/18)).
 
 ---
 
@@ -443,7 +443,7 @@ Map<UserId, List<Event?>>
 
 Resolving only `T::class.java` is insufficient for these cases because JVM classes alone do not preserve the complete Kotlin type.
 
-The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a `keyBy`, `MapState` or broadcast-state key ([Collections](docs/architecture.md#collections)). Decoding rebuilds a `Map`'s keys, records through their constructors and collections as an `ArrayList` or `LinkedHashMap`, and keeps no object identity. A key has to come back equal to the key that was written, so a `Map` key type fails explicitly if, at any depth, it has a hand-written `equals()` or `hashCode()`, a data class with a `var` constructor property, or a `List` or `Map` ([Map keys](docs/architecture.md#map-keys)). A `Map` whose keys aren't distinct under `equals()`, such as an `IdentityHashMap`, fails when it's copied or read instead of losing an entry.
+The first release models `List` and `Map`, as record fields and as top-level types, with one encoding for both. `Set`, `Collection`, the mutable interfaces such as `MutableList`, and arrays fail explicitly. A decoded `List` is an `ArrayList`, and a decoded `Map` is a `LinkedHashMap` that keeps the order its entries were written in. Two equal maps built in different orders can serialize to different bytes, so a `Map` is never a `keyBy`, `MapState` or broadcast-state key ([Collections](docs/architecture.md#collections)). Decoding rebuilds a `Map`'s keys, records through their constructors and collections as an `ArrayList` or `LinkedHashMap`, and keeps no object identity. A key has to come back equal to the key that was written, so a `Map` key type fails explicitly if, at any depth, it has a hand-written `equals()` or `hashCode()`, a data class with a `var` constructor property, or a `List` or `Map` ([Map keys](docs/architecture.md#map-keys)). A `Map` value is written as its entries, so a map class with its own lookup rules, such as a `TreeMap` with a comparator, an `IdentityHashMap` or a `withDefault` map, would come back with different lookups. Such a map fails explicitly when it's written or copied. Only `HashMap`, `LinkedHashMap` and the classes that Kotlin's and the JDK's map factories return are accepted, and `toMap()` converts any other map.
 
 ---
 
@@ -480,7 +480,7 @@ enum class Priority {
 
 Declaration order and ordinals aren't stable. Inserting or reordering a subtype or constant would make old state decode as a different value, with no error. A tag derived from the name would change silently on a rename. An explicit ID survives both, so subtypes and constants can be renamed, reordered or moved between files without changing their bytes. An ID is permanent: don't give it to a different constant or subtype. If that one has a new name, Flinkt can't tell the change from a rename.
 
-A missing or duplicate ID is a compile error. Reading an ID the current code doesn't declare fails. In the first release, any change to the set of IDs is incompatible, and so is a name that the old state had under another ID, such as two constants that swap IDs. Enum constants with bodies, `object` and `data object` subtypes, and nested sealed hierarchies are supported, and each nested level numbers its own subtypes. [Enum and sealed identity](docs/architecture.md#enum-and-sealed-identity) gives the encoding.
+A missing or duplicate ID is a compile error. Reading an ID the current code doesn't declare fails. Any change to the set of IDs is incompatible, and so is a name that the old state had under another ID, such as two constants that swap IDs. A change to a subtype's own fields follows the rules for records ([Schema and state compatibility](#schema-and-state-compatibility)). Enum constants with bodies, `object` and `data object` subtypes, and nested sealed hierarchies are supported, and each nested level numbers its own subtypes. [Enum and sealed identity](docs/architecture.md#enum-and-sealed-identity) gives the encoding.
 
 An enum constant, an `object` and a `data object` are written as their ID alone, and reading one returns the constant or singleton of the JVM that reads it. None of its properties are written. So an `object` or `data object` subtype is a stateless marker: a stored property on it is a compile error, and a subtype that carries data is a data class. An enum can declare `val`s, as in `Priority(val weight: Int)`, because every JVM builds them from the declaration. A stored `var` on an enum is a compile error.
 
@@ -563,6 +563,10 @@ The rule is recursive. A data class or value class is a key only if every proper
 
 Changing the `equals()` or `hashCode()` of a type that already keys persisted state is a breaking change, even when its schema stays the same, and no serializer snapshot can see it. The same holds for a Kotlin compiler upgrade that changes the generated `hashCode()`, because the compiler that builds the key class generates it. Flinkt lists a Kotlin version as tested only after its key hashes match the pinned values ([Kotlin compiler compatibility](docs/kotlin-compatibility.md#key-identity-across-compiler-versions)). Through the view, adding such an override makes the type ineligible, so the upgraded job fails when its graph is built.
 
+Reordering a data class's constructor parameters changes its generated `hashCode()` too, because the hash combines the components in constructor order. `UserKey(tenant = 1, id = 2)` would move to another key group. The snapshot records constructor order, so a reorder anywhere in a `keyBy` key fails the restore. The same reorder in a value or a map key restores as-is, because its bytes don't change and nothing persists its hash code.
+
+A key's schema doesn't evolve. A change that would migrate a `ValueState<User>`, such as removing a field, fails the restore when `User` is a `keyBy` key, a `MapState` user key or a broadcast-state key. `mapStateDescriptor` and `runtimeContext.mapState` record in the serializer snapshot that the map's key is a key, and the view's `keyBy` records that its key is a partition key. A `MapStateDescriptor` built by hand from `typeInfo<K>()` doesn't, and Flink's heap backend and broadcast state would then accept a value migration of that key. Nor does `asFlink().keyBy(selector, typeInfo<K>())`, which lets a constructor reorder of `K` restore with its keys in the wrong key groups ([Schema evolution](docs/schema-evolution.md#keys)).
+
 A rejected key fails when the job graph is built for `keyBy`, or in `open()` for `mapState`. The message names the type, the context and the reason. Two exits skip Flinkt's key checks on purpose: `keyBy` with a `TypeInformation` that Flinkt didn't build, and anything called through `asFlink()`. Flinkt's guarantee is gone there, and Flink's `keyBy` validation doesn't take its place for a Flinkt `TypeInformation`. Flink recognizes only its own type-information classes, such as `EnumTypeInfo`, so `asFlink().keyBy(selector, typeInfo<Priority>())` accepts an enum partition key that both Flinkt and plain Flink reject ([#41](https://github.com/Lychee-Technology/flinkt/issues/41)). `mapStateDescriptor<K, V>()` checks no key rule, because its descriptor may become broadcast state. Nothing checks broadcast-state keys yet, because broadcast is reached through `asFlink()`. [Keys](docs/architecture.md#keys) gives the reasons.
 
 ---
@@ -610,20 +614,26 @@ but detection alone does not prove that the new serializer can read the previous
 
 Flink checkpoint and savepoint compatibility is governed by `TypeSerializer` and `TypeSerializerSnapshot`.
 
-The first release is strict. A snapshot whose schema is identical to the current declaration is compatible as-is. Any structural difference is incompatible, and restore stops with an error instead of reading state it might misinterpret. That covers:
+For ordinary persisted values, such as a `ValueState` value, a `ListState` element or a `MapState` value, Flinkt's target is the schema evolution Flink offers for POJOs:
 
-- a field added, removed, renamed, reordered or retyped;
-- a nullability change;
-- a changed nested type or collection element;
-- an enum constant or sealed subtype added or removed, or one that keeps its name given a different ID;
-- a value class's underlying type;
-- a type argument.
+| Change | Result |
+|---|---|
+| a field removed | migrates, and the old value is dropped |
+| a field added, with a defined migration default | migrates |
+| a field added without one, such as a non-null `String` | incompatible |
+| a field renamed | a removal plus an addition |
+| constructor parameters reordered | compatible as-is, because fields are persisted in an order derived from their names ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)), except in a `keyBy` key ([Keys](#keys)) |
+| a field's type changed, including its nullability | incompatible |
+| the class renamed or moved to another package | incompatible |
+| a nested record, `List` element or `Map` value changes | the same rules, recursively |
 
-Flinkt doesn't migrate state in the first release, even where a migration looks feasible. Renaming or reordering enum constants and sealed subtypes that keep their IDs isn't a change.
+Which added fields get a migration default is still open ([#37](https://github.com/Lychee-Technology/flinkt/issues/37)). The candidates are `null` for a nullable field and a default that the declaration states. Whether a non-null type such as `Int` or `Boolean` gets an intrinsic default like `0` or `false` is part of that decision. A non-null `String`, an enum or a validated value class has nothing like Java's default, so it needs a stated default. A default argument in the constructor isn't used, because it can compute a different value on each restore.
 
-The same holds when the type is a key. A structural change to a `keyBy` key, a `MapState` user key or a broadcast-state key is incompatible on every state backend. An unchanged schema is necessary for a key but not sufficient, because a key's identity also includes its `equals()` and `hashCode()` ([Keys](#keys)).
+Migration is built in stages. A change stays incompatible until the stage that supports it lands with its evidence, and restore then stops with an error instead of reading state it might misinterpret. [Stages](docs/schema-evolution.md#stages) says which changes each stage enables. Renaming or reordering enum constants and sealed subtypes that keep their IDs isn't a change. Adding or removing one is incompatible, and so is giving an existing name another ID.
 
-Serializer-format decisions become difficult to reverse after released applications have persisted state. So the snapshots record the full schema even though the first release only compares it. The preferred long-term trade-off is still:
+Keys don't evolve. A structural change to a `keyBy` key, a `MapState` user key, a broadcast-state key, or the key type of a `Map`, fails the restore on every backend ([Keys](#keys)). An unchanged schema is necessary for a key but not sufficient, because a key's identity also includes its `equals()` and `hashCode()`.
+
+Serializer-format decisions become difficult to reverse after released applications have persisted state. The trade-off is:
 
 ```text
 compact per-record representation
@@ -633,7 +643,7 @@ schema-rich serializer snapshot
 migration work during restore when necessary
 ```
 
-rather than writing field names or IDs into every record merely to make future migration easier. A later release can add migrations for state the first release wrote, without changing what the first release persisted. [Schema evolution](docs/architecture.md#schema-evolution) gives the reasons, and [testing.md](docs/testing.md#serializer-snapshot-compatibility) lists every transition.
+rather than writing field names or IDs into every record merely to make future migration easier. From the first release on, the snapshot records the full schema, so a migration reads old bytes without the classes that wrote them, and the class of a removed field can leave the job's jar. [Schema evolution](docs/schema-evolution.md) gives the reasons, and [testing.md](docs/testing.md#serializer-snapshot-compatibility) the evidence each result needs.
 
 ---
 
@@ -786,7 +796,7 @@ Review should focus on the boundaries where Kotlin convenience can accidentally 
 
 **Interoperability:** Does `asFlink()` return the original object, so every Flink API still accepts it?
 
-**State compatibility:** Does every compatibility result correspond to bytes that the new serializer can actually consume? This deserves more scrutiny than ordinary API code because persisted state outlives a process and often outlives a library release.
+**State compatibility:** Does every compatibility result correspond to bytes that the new serializer can actually consume? Is every migration the snapshot promises one the old-layout reader performs, shown on both state backends? Can a value migration reach a key? This deserves more scrutiny than ordinary API code because persisted state outlives a process and often outlives a library release.
 
 **Keys:** Does every key rule rest on something Flinkt can check mechanically, rather than on the user's `hashCode()`? Would a key whose hash code or bytes differ in the restoring JVM be rejected before it's used?
 
