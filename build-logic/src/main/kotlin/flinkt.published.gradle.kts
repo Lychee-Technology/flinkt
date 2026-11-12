@@ -41,7 +41,7 @@ val checkDependencyBoundaries = tasks.register<DependencyBoundaryCheck>("checkDe
     description = "Fails if a classpath of this module crosses an architecture dependency boundary."
     modulePath = projectPath
     for (name in listOf("compileClasspath", "runtimeClasspath", "testCompileClasspath", "testRuntimeClasspath")) {
-        classpaths.put(name, configurations.named(name).flatMap { it.incoming.resolutionResult.rootComponent })
+        classpath(configurations.named(name))
     }
     forbid(
         "runtimeClasspath",

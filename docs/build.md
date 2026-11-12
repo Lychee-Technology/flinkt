@@ -23,7 +23,7 @@ Flink is `compileOnly` in an adapter, because the job's environment supplies it 
 
 Adding an adapter, such as #27's `flinkt-flink22`, takes a version in `gradle/libs.versions.toml`, two lines in `settings.gradle.kts`, an `adapters/flinkt-flink22/build.gradle.kts` that applies `flinkt.flink-adapter` and names that version, the line's directory with its `ADAPTER_FLINK_LINE`, and an ABI dump from `updateKotlinAbi`. A CI lane for it is a separate decision ([PR CI](#pr-ci)). 2.2 and 2.3 differ in nothing the adapters use yet. If 2.x-only code appears, the per-line directories of 2.2 and 2.3 would duplicate it, and a shared 2.x directory may then be worth adding.
 
-The build logic is in `build-logic/`, as convention plugins: `flinkt.kotlin-jvm` for every module, `flinkt.published` for published modules, `flinkt.flink-adapter` for adapters and `flinkt.compile-tests` for the harness.
+The build logic is in `build-logic/`, as convention plugins: `flinkt.kotlin-jvm` for every module, `flinkt.published` for published modules, `flinkt.flink-adapter` for adapters and `flinkt.compile-tests` for the harness. `build-logic` is an included build, and a task named on the command line doesn't reach one, so the root project's `check` depends on `build-logic`'s. That way `./gradlew build` runs the build logic's own tests too.
 
 ## Toolchain
 
@@ -79,6 +79,12 @@ The plugin's ABI validation DSL is experimental in Kotlin 2.4.21: it needs `@Opt
 
 The Flink rule for adapters goes by Maven group, so a jar that shades Flink classes under another group would pass it. `flinkt-core`'s rule is an allowlist, so nothing can pass it unnoticed.
 
+**File dependencies.** Gradle leaves a `files(...)` dependency out of the resolved graph, whether the module declares it or gets it from a project it depends on, so the check reads each classpath's file dependencies separately. A file has no group or name for a rule to check, so every rule on its classpath rejects it. A Flink jar added to `flinkt-core` with `implementation(files(...))` fails the allowlist, and with `testImplementation(files(...))` the test rule. The report names the file, but there's no path to name. No checked classpath needs a file dependency. On a published runtime classpath one would be a packaging bug anyway: Gradle doesn't publish file dependencies, so a consumer wouldn't get the file.
+
+The check reads dependencies. A file added straight to a compile task's or a source set's classpath isn't a dependency, and the check doesn't see it.
+
+`DependencyBoundaryCheckTest` in `build-logic` runs the check on Gradle's own dependency resolution, with modules from a Maven repository the test writes, project dependencies and file dependencies.
+
 ## Compile-test harness
 
 `:test-support` holds the test code that every module's tests share. It's internal: a published `flinkt-testkit` waits until something outside the repository needs it ([Testkit](testing.md#testkit)). A module gets it by applying `flinkt.compile-tests`, which every published module does.
@@ -111,7 +117,7 @@ Each compilation keeps its sources, generated code and classes under the module'
 
 `.github/workflows/pr.yml` runs two lanes on every pull request and on `main`:
 
-- **Primary**, `./gradlew build -x :flinkt-flink120:check`: every module's compilation, tests, ABI and boundary checks, with the 2.3 adapter as the primary adapter ([Pull requests](testing.md#pull-requests)). The 1.20 adapter still compiles here, but its tests run in its own lane.
+- **Primary**, `./gradlew build -x :flinkt-flink120:check`: every module's compilation, tests, ABI and boundary checks, and the build logic's tests, with the 2.3 adapter as the primary adapter ([Pull requests](testing.md#pull-requests)). The 1.20 adapter still compiles here, but its tests run in its own lane.
 - **Flink 1.20**, `./gradlew :flinkt-flink120:check -Pflinkt.test.excludeTags=minicluster`: the shared adapter source compiled against 1.20, with the shared and 1.20 tests, ABI and boundary checks, and no MiniCluster.
 
 A test joins a lane by being in a module the lane builds, so later issues add tests without changing the workflow. A test that starts a MiniCluster is tagged `@Tag("minicluster")`, which keeps it off the 1.20 PR lane. The merge, nightly and release tiers are #28 and #30.

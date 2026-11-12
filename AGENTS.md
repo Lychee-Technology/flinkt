@@ -24,7 +24,8 @@ Each rule has one canonical home, and the summary below links to it. When a rule
 Gradle, through the wrapper. A machine without JDK 17 gets one automatically (Foojay).
 
 ```sh
-./gradlew build                                            # compile, test and check every module
+./gradlew build                                            # compile, test and check every module and the build logic
+./gradlew :build-logic:test                                # the build logic's own tests
 ./gradlew :flinkt-core:test                                # one module's tests
 ./gradlew :test-support:test --tests 'io.flinkt.testing.compile.KotlinCompilationTest'   # one test class
 ./gradlew :test-support:test --tests '*KotlinCompilationTest.warnings*'                  # one test method
@@ -37,7 +38,7 @@ PR CI runs two lanes ([build.md](docs/build.md#pr-ci)): `./gradlew build -x :fli
 - **Versions** are pinned in `gradle/libs.versions.toml`: JDK 17, Kotlin 2.4.21 as the build compiler, 2.4.0 as the minimum, KSP 2.3.13, Flink 2.3.0 and 1.20.5. No dynamic selectors. ([build.md](docs/build.md#pinned-versions))
 - **Published classes** target Java 8, because Flink 1.20 still runs on it, and compile with language and API version 2.4 against `kotlin-stdlib` 2.4.0. ([build.md](docs/build.md#toolchain))
 - **Adapters** compile `adapters/shared/src` plus their own `src`, which holds only what can't compile on another line. Flink is `compileOnly`, and the line's Flink is on the test classpath. ([build.md](docs/build.md#adapters))
-- **`check` fails** on a public ABI that differs from the module's `api/*.api` dump, on a declaration without explicit visibility in a published module, and when `checkDependencyBoundaries` finds Flink in `flinkt-core` or on a published runtime classpath, or `flinkt-ksp` or `flinkt-view-codegen` on one. ([build.md](docs/build.md#dependency-boundaries))
+- **`check` fails** on a public ABI that differs from the module's `api/*.api` dump, on a declaration without explicit visibility in a published module, and when `checkDependencyBoundaries` finds Flink in `flinkt-core` or on a published runtime classpath, or `flinkt-ksp` or `flinkt-view-codegen` on one. A file dependency fails every boundary on its classpath, because it has no coordinates to check. ([build.md](docs/build.md#dependency-boundaries))
 - **Compile tests** use `:test-support`: `exactTypeOf(x).shouldBe<T>()` for exact static types, and `KotlinCompilation(KotlinCompiler.BUILD or MINIMUM).compile(code)` with `assertSuccess()` or `assertFailure(...)` for code that must or mustn't compile, optionally with a KSP processor. Match diagnostic names and the wording both compilers share. Don't build another harness. ([build.md](docs/build.md#compile-test-harness))
 - **Tag a MiniCluster test** `@Tag("minicluster")`. The 1.20 PR lane skips it.
 
