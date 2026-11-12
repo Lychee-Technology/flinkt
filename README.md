@@ -563,7 +563,9 @@ The rule is recursive. A data class or value class is a key only if every proper
 
 Changing the `equals()` or `hashCode()` of a type that already keys persisted state is a breaking change, even when its schema stays the same, and no serializer snapshot can see it. Through the view, adding such an override makes the type ineligible, so the upgraded job fails when its graph is built.
 
-A key's schema doesn't evolve. A change that would migrate a `ValueState<User>`, such as removing a field, fails the restore when `User` is a `keyBy` key, a `MapState` user key or a broadcast-state key. `mapStateDescriptor` and `runtimeContext.mapState` record in the serializer snapshot that the map's key is a key. A `MapStateDescriptor` built by hand from `typeInfo<K>()` doesn't, and Flink's heap backend and broadcast state would then accept a value migration of that key ([Schema evolution](docs/schema-evolution.md#keys)).
+Reordering a data class's constructor parameters changes its generated `hashCode()` too, because the hash combines the components in constructor order. `UserKey(tenant = 1, id = 2)` would move to another key group. The snapshot records constructor order, so a reorder anywhere in a `keyBy` key fails the restore. The same reorder in a value or a map key restores as-is, because its bytes don't change and nothing persists its hash code.
+
+A key's schema doesn't evolve. A change that would migrate a `ValueState<User>`, such as removing a field, fails the restore when `User` is a `keyBy` key, a `MapState` user key or a broadcast-state key. `mapStateDescriptor` and `runtimeContext.mapState` record in the serializer snapshot that the map's key is a key, and the view's `keyBy` records that its key is a partition key. A `MapStateDescriptor` built by hand from `typeInfo<K>()` doesn't, and Flink's heap backend and broadcast state would then accept a value migration of that key. Nor does `asFlink().keyBy(selector, typeInfo<K>())`, which lets a constructor reorder of `K` restore with its keys in the wrong key groups ([Schema evolution](docs/schema-evolution.md#keys)).
 
 A rejected key fails when the job graph is built for `keyBy`, or in `open()` for `mapState`. The message names the type, the context and the reason. Two exits skip Flinkt's key checks on purpose: `keyBy` with a `TypeInformation` that Flinkt didn't build, and anything called through `asFlink()`. Flinkt's guarantee is gone there, and Flink's `keyBy` validation doesn't take its place for a Flinkt `TypeInformation`. Flink recognizes only its own type-information classes, such as `EnumTypeInfo`, so `asFlink().keyBy(selector, typeInfo<Priority>())` accepts an enum partition key that both Flinkt and plain Flink reject ([#41](https://github.com/Lychee-Technology/flinkt/issues/41)). `mapStateDescriptor<K, V>()` checks no key rule, because its descriptor may become broadcast state. Nothing checks broadcast-state keys yet, because broadcast is reached through `asFlink()`. [Keys](docs/architecture.md#keys) gives the reasons.
 
@@ -620,7 +622,7 @@ For ordinary persisted values, such as a `ValueState` value, a `ListState` eleme
 | a field added, with a defined migration default | migrates |
 | a field added without one, such as a non-null `String` | incompatible |
 | a field renamed | a removal plus an addition |
-| constructor parameters reordered | compatible as-is, because fields are persisted in an order derived from their names ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)) |
+| constructor parameters reordered | compatible as-is, because fields are persisted in an order derived from their names ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)), except in a `keyBy` key ([Keys](#keys)) |
 | a field's type changed, including its nullability | incompatible |
 | the class renamed or moved to another package | incompatible |
 | a nested record, `List` element or `Map` value changes | the same rules, recursively |

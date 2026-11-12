@@ -574,6 +574,8 @@ Keys don't evolve. Each role is tested on its own, because Flink restores values
 
 "Fails explicitly" means the restore stops before any value is read wrongly or any key's state is filed under another key, and the error names the canonical type, the first incompatible difference and the role where it's known. Which error a test expects depends on the role and on #5, because Flink calls the old snapshot's `restoreSerializer()` while it restores every state, registered or not ([What Flink does on restore](schema-evolution.md#what-flink-does-on-restore)). For a partition key, Flink's own check comes first and throws a `StateMigrationException`. In every other role, if #5 makes `restoreSerializer()` fail for an incompatible plan, that error stops the restore on both backends. If #5 instead returns a serializer that refuses to read, the heap backend, operator `ListState` and broadcast state fail when they read with it, and RocksDB fails with Flink's incompatibility error when the state is registered again ([The old-layout serializer](schema-evolution.md#the-old-layout-serializer)). Each role other than the partition key also has a case where the upgraded job no longer registers the changed state, and expects the result #5's choice gives.
 
+A constructor reorder changes no bytes and no field name, but it changes a data class's generated `hashCode()` ([Keys](schema-evolution.md#keys)). It's tested in every role with the old and new key classes compiled separately: `Key(val a: Int, val b: Int)` reordered to `Key(val b: Int, val a: Int)`, as the key itself and nested as `Outer(val k: Key, val id: Long)`. As a `keyBy` key it fails explicitly on the heap backend and on RocksDB, and the test asserts that the old and new key groups of its sample key differ, so the case can't pass by chance. As a value, a keyed `MapState` user key on heap and on RocksDB, and a broadcast-state key, it restores, and a lookup with every written key finds its state. The snapshot of the view's `keyBy` key records the partition-key role, and a value's snapshot doesn't.
+
 For a key, an identical schema is necessary but not sufficient. A changed `equals()` or `hashCode()` breaks a key without any schema difference. The [key tests](#comparator-and-key-semantics) and [savepoint tests](#savepoint-compatibility) cover that, not the snapshot tests.
 
 A build-time schema checker and `TypeSerializerSnapshot` answer different questions and should have separate tests.
@@ -988,7 +990,7 @@ Testing changes deserve review at the boundaries where false confidence is easie
 
 **Snapshot results:** Is `compatibleAsIs` backed by a real old-bytes test? Is `compatibleAfterMigration` backed by a real migration on the heap backend and on RocksDB, and by a second restore of the migrated state?
 
-**Key roles:** Does each key-role test use the same change that a value test migrates?
+**Key roles:** Does each key-role test use the same change that a value test migrates? Is a constructor reorder of a `keyBy` key expected to fail?
 
 **Keys:** Could the test pass with an identity hash code, for example because the second JVM reproduces the first one's identity hashes? Does it compare the bytes of equal keys built in different ways?
 

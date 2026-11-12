@@ -26,7 +26,7 @@ This is the target for ordinary persisted values: stream records, `ValueState` v
 | Change | Result |
 |---|---|
 | identical schema | `compatibleAsIs` |
-| source declaration reorder, persisted layout unchanged | `compatibleAsIs` |
+| source declaration reorder, persisted layout unchanged | `compatibleAsIs`, except in a `keyBy` key ([Keys](#keys)) |
 | enum constant or sealed subtype renamed, reordered or moved, ID unchanged | `compatibleAsIs` |
 | two constants or subtypes swap IDs and both take names the old table doesn't have | `compatibleAsIs`: indistinguishable from two renames, so an ID is permanent |
 | field removed | `compatibleAfterMigration` |
@@ -44,7 +44,7 @@ This is the target for ordinary persisted values: stream records, `ValueState` v
 
 Results compose like Flink's composite serializers do. Any incompatible child makes the parent incompatible. Otherwise any child that migrates makes the parent migrate. The parent is as-is only when every child is and its own layout is unchanged. So `User.address` migrates when `Address(city, zip)` becomes `Address(city)`.
 
-- **Reorder.** #5 orders persisted fields canonically, by name (see [What the first snapshot must carry](#what-the-first-snapshot-must-carry)). Reordering constructor parameters doesn't change the bytes, so it isn't a migration.
+- **Reorder.** #5 orders persisted fields canonically, by name (see [What the first snapshot must carry](#what-the-first-snapshot-must-carry)). Reordering constructor parameters doesn't change the bytes, so it isn't a migration. It does change a data class's generated `hashCode()`, so the snapshot also records constructor order, and a reorder anywhere in a `keyBy` key is incompatible ([Keys](#keys)).
 - **Rename.** Flinkt doesn't detect renames. `name` → `displayName` drops the old value and adds a field, which then needs a migration default or is incompatible. An explicit field ID or rename mapping would be a separate decision.
 - **Added fields.** Kotlin can't leave a field unset the way Java leaves it at `null` or zero, so an added field migrates only when Flinkt can construct a legal, deterministic value for it. `null` for a nullable field, and an explicitly declared default, are the candidates. Whether any non-null type gets an intrinsic default such as `0` or `false` is [#37](https://github.com/Lychee-Technology/flinkt/issues/37)'s decision, not an assumption. A Kotlin constructor default isn't a migration contract. `val country: String = currentLocale()` can give a different value on each restore, and reaching it means calling the synthetic `$default` constructor, whose shape is a compiler detail.
 - **Class identity.** A generated type is identified by its JVM class name (#5). Moving `com.old.User` to `com.new.User` is incompatible. An explicit logical type ID would be a separate decision, if relocation becomes a real need. Within a sealed hierarchy, subtypes are identified by `@FlinkId`, not by class name ([Enum and sealed identity](architecture.md#enum-and-sealed-identity)).
@@ -66,14 +66,17 @@ A persisted key decides where state is filed and how it's found. A migration tha
 
 A value migration is never evidence that a key can migrate. `ValueState<User>` migrates when `User` loses `email`. A `keyBy` whose key is `User` fails with the same change.
 
-Flink enforces part of this on its own, and not the rest ([What Flink does on restore](#what-flink-does-on-restore)). It rejects a partition-key serializer that needs migration on every keyed restore path. RocksDB requires an unchanged user key when it migrates `MapState`. The heap backend and broadcast state read every restored entry with the old snapshot's `restoreSerializer()` before any compatibility check, and afterwards accept anything but `incompatible`. On those two paths only the old snapshot can stop a key migration, so the snapshot records that its serializer was a persisted map key:
+A partition key can also break with no structural change. A data class's generated `hashCode()` combines its components in constructor order, and Flink picks a partition key's key group from that hash. Reorder `data class Key(val a: Int, val b: Int)` to `Key(val b: Int, val a: Int)`, and the canonical bytes and the fields by name stay the same, but `Key(a = 1, b = 2)` hashes to 33 before and 63 after: key group 29, then 44, at max parallelism 128. Nested as `Outer(val k: Key, val id: Long)`, the outer key moves from group 35 to 126 (Kotlin 2.4.20, Flink 2.3.0's `KeyGroupRangeAssignment`). Such a restore would succeed, and the job would stop finding its state. So the snapshot records each record's constructor order beside its fields ([What the first snapshot must carry](#what-the-first-snapshot-must-carry)). In the partition-key role, a change of constructor order in any record reachable from the key, through its components, nested records and type arguments, is incompatible. In a value or a map key it's as-is. Their bytes don't change, the heap backend and broadcast state rebuild their maps with the restoring JVM's hash codes, and RocksDB finds a `MapState` entry by its bytes.
+
+Flink enforces part of this on its own, and not the rest ([What Flink does on restore](#what-flink-does-on-restore)). It rejects a partition-key serializer that needs migration on every keyed restore path, but a reorder doesn't look like one unless the snapshot knows the serializer is a partition key. RocksDB requires an unchanged user key when it migrates `MapState`. The heap backend and broadcast state read every restored entry with the old snapshot's `restoreSerializer()` before any compatibility check, and afterwards accept anything but `incompatible`. On those two paths only the old snapshot can stop a key migration. So the snapshot records whether its serializer was a persisted key, and which kind:
 
 - `mapStateDescriptor<K, V>()` and `runtimeContext.mapState<K, V>()` create `K`'s serializer in the map-key role ([#13](https://github.com/Lychee-Technology/flinkt/issues/13)). A `MapStateDescriptor`'s key is a map key whether it becomes keyed `MapState` or broadcast state, so the descriptor helper can set the role without knowing which.
-- The snapshot records the role ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)). If the old or the current serializer is a map key, only as-is passes.
+- The view's `keyBy` gives Flink the key's `TypeInformation` in the partition-key role, whether it builds it from the reified key type or is given one of Flinkt's own ([#32](https://github.com/Lychee-Technology/flinkt/issues/32)).
+- The snapshot records the role ([#5](https://github.com/Lychee-Technology/flinkt/issues/5)). If the old or the current serializer is a map key, only as-is passes. If either is a partition key, only as-is with unchanged constructor order passes.
 - A `Map<K, V>` inside a value needs no role. Its schema already says which position is the key.
-- A `MapStateDescriptor` built by hand from `typeInfo<K>()` gives `K` the value role. It's the same exit as any descriptor passed to Flink directly, and Flink's heap backend and broadcast state would then accept a value migration of the key.
+- A `MapStateDescriptor` built by hand from `typeInfo<K>()` gives `K` the value role. It's the same exit as any descriptor passed to Flink directly, and Flink's heap backend and broadcast state would then accept a value migration of the key. Likewise, `asFlink().keyBy(selector, typeInfo<K>())` gives a partition key the value role, so a constructor reorder of `K` restores and moves its key groups. That's the raw-path exit that [#41](https://github.com/Lychee-Technology/flinkt/issues/41) addresses.
 
-The role is data inside the one snapshot class, not a key-specific snapshot class. The first release records it even though it doesn't migrate anything yet, because a later release reading first-release state needs to know which serializers were map keys.
+The role is data inside the one snapshot class, not a key-specific snapshot class. The first release records it even though it doesn't migrate anything yet: a later release reading first-release state needs to know which serializers were keys, and the constructor-order rule for partition keys applies from the first release.
 
 ### Not in the target
 
@@ -90,7 +93,7 @@ Every structural change is incompatible until the stage that enables it lands wi
 
 | Stage | Issues | What becomes true |
 |---|---|---|
-| 1. Formats | #5, #16, #18, #20, #22, implemented by #12, #15, #17, #19, #21 | snapshots can describe and consume the old layout, and every structural change is still incompatible |
+| 1. Formats | #5, #16, #18, #20, #22, implemented by #12, #15, #17, #19, #21 | snapshots can describe and consume the old layout, and every structural change is still incompatible, as is a constructor reorder in a `keyBy` key once #32 sets the role |
 | 2. Planning | [#34](https://github.com/Lychee-Technology/flinkt/issues/34) | one plan decides compatibility. No result changes |
 | 3. Old-layout restore | [#35](https://github.com/Lychee-Technology/flinkt/issues/35) | `restoreSerializer()` and `resolveSchemaCompatibility` both run on the plan. No result changes |
 | 4. Removal | [#36](https://github.com/Lychee-Technology/flinkt/issues/36) | removing a field from a top-level record migrates |
@@ -122,10 +125,11 @@ These are requirements on #5's format. #5 still decides the bytes.
 - **One stable snapshot class.** Flink writes the snapshot implementation's fully-qualified class name into checkpoint metadata and instantiates it by name on restore. That name is part of the persisted contract. It's the same on every adapter line, because a savepoint written through one adapter is restored through another (#29), and no per-line wrapper or subclass may become the class Flink records.
 - **Type identity.** A generated type is identified by its JVM class name, as `Class.getName()` spells it, for example `com.example.User`.
 - **Field identity by name.** A field is identified by its Kotlin property name, not by its constructor position.
+- **Constructor order.** Each record's schema also records the order of its primary constructor's parameters. It doesn't decide the bytes or a field's identity. A data class's generated `hashCode()` follows it, so the planner needs it for a partition key ([Keys](#keys)).
 - **Canonical field order.** Records write fields in an order derived from their names, so a pure declaration reorder changes no bytes. The recommended contract is ascending `String.compareTo` order of the property names, which is locale-independent and the same in every JVM. #5 confirms it with a prototype that shows generated code reading into locals in that order and then calling the constructor, so Kotlin constructor semantics don't change.
 - **Compact records.** Records carry no field names, type names or schema. Metadata belongs in the snapshot.
 - **Nested values inline.** A nested record is written in place, with no length prefix. A migration consumes a removed nested value by walking its old schema, so the steady-state path doesn't pay a prefix on every nested value to make a later skip cheaper.
-- **The map-key role** ([Keys](#keys)).
+- **The key role**: map key or partition key ([Keys](#keys)).
 
 ### The planner
 
@@ -178,5 +182,6 @@ So Flinkt's target matches `PojoSerializer` on removal, recursive migration, typ
 
 - **#5:** the record bytes, within the constraints above: scalar and string encodings, the null bitmap's size, bit order and nullable-field order, the top-level nullable marker, and the snapshot's own encoding. What `restoreSerializer()` returns for an incompatible plan, as above.
 - **#35:** what the old-layout serializer writes for a removed field when Flink writes a carried state with it.
+- **#32:** whether the key role takes part in `TypeInformation` equality. Flink requires the key types of two connected keyed streams to be equal (`ConnectedStreams`, checked in 2.3.0), so a role in equality would stop a stream keyed through the view from connecting to one keyed through `asFlink()` with the same type.
 - **#18:** the value-class representation. The direction is recorded in [architecture.md](architecture.md#open-questions).
 - **#37:** migration defaults for added fields.
