@@ -960,6 +960,8 @@ flinkt/
 
 ## Testkit
 
+Until something outside the repository needs one, test code shared between modules lives in the internal `:test-support` module: the exact-type carrier and the compile-test harness ([Compile-test harness](build.md#compile-test-harness)). Contract helpers start there too.
+
 A dedicated `flinkt-testkit` can centralize recurring contract assertions without hiding Flink semantics. Potential helpers include:
 
 ```kotlin

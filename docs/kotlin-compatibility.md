@@ -14,16 +14,18 @@ Kotlin support is independent of the Flink line. Every Flink adapter supports th
 
 ## Support table
 
-Status as of November 11, 2026. Flinkt has no build or release yet, so it claims no Kotlin version as tested. The table records the target range and what has been measured so far.
+Status as of November 12, 2026. Flinkt has a build but no release, and the key-hash checks ([#32](https://github.com/Lychee-Technology/flinkt/issues/32)) don't exist yet, so it claims no Kotlin version as tested. The table records the target range, the versions that `gradle/libs.versions.toml` pins, and what has been measured so far.
 
-| Kotlin compiler | Status | Evidence so far |
+| Version | Status | Evidence so far |
 |---|---|---|
 | 1.x, 2.0.x to 2.3.x | Unsupported | Kotlin 1.4.32 is historical evidence that the generated `hashCode()` can change ([below](#historical-evidence-kotlin-1432)) |
-| 2.4.0 | Minimum supported target. CI tests it once the build exists ([#4](https://github.com/Lychee-Technology/flinkt/issues/4)) | Key hashes and key groups measured |
-| 2.4.10, 2.4.20, 2.4.21 | In the target range. Not yet tested by Flinkt CI | Key hashes and key groups measured, identical to 2.4.0 |
+| 2.4.0 | Minimum supported target, pinned as the minimum. In PR CI, the compile-test harness compiles the snippets that stand for user code with it | Key hashes and key groups measured |
+| 2.4.10, 2.4.20 | In the target range. Not yet tested by Flinkt CI | Key hashes and key groups measured, identical to 2.4.0 |
+| 2.4.21 | In the target range, pinned as the build compiler. Every suite runs on it | Key hashes and key groups measured, identical to 2.4.0 |
 | later releases, including 2.5.0 | Not supported until added | 2.5.0-RC measured, identical hashes. A pre-release is never supported |
+| KSP 2.3.13 | Pinned KSP, used with both pinned compilers | Ran a probe processor with Kotlin 2.4.0 through 2.4.21 ([KSP](#what-ci-tests)) |
 
-When the build exists, the table lists the minimum and the newest tested release as pinned versions. A supported release is any stable release between them, each of which has passed the key-hash checks ([What CI tests](#what-ci-tests)).
+Once the key-hash checks pass with them, the pinned minimum and build compiler bound the tested range. A supported release is any stable release between them, each of which has passed the key-hash checks ([What CI tests](#what-ci-tests)).
 
 ## Four kinds of compatibility
 
@@ -62,7 +64,7 @@ Compiled by Kotlin 1.4.32, a `Boolean` component contributes 1 or 0 to a data cl
 
 ## What CI tests
 
-Two compilers, not a matrix. Both versions are pinned in a committed file, as Flink versions are, and no lane resolves a dynamic version such as `2.4.+`.
+Two compilers, not a matrix. Both versions are pinned in a committed file, `gradle/libs.versions.toml`, as Flink versions are, and no lane resolves a dynamic version such as `2.4.+`. The compile-test harness runs either one ([Compile-test harness](build.md#compile-test-harness)).
 
 - **The build compiler** is the newest tested 2.4.x or later release. It builds Flinkt, and every suite runs on it.
 - **The minimum, 2.4.0,** compiles the code that stands for user code against Flinkt as built: KSP compilation and negative compilation tests, the key classes of the key-hash checks, and the integration job. That catches a published API, a generated source or a processor behavior that needs a compiler newer than 2.4.0.
@@ -71,7 +73,7 @@ Which tier runs what is in [CI tiers](testing.md#ci-tiers). Releases between the
 
 Adopting a new Kotlin release is a reviewed pull request that moves the pinned build compiler and passes every lane, the key-hash checks included, before Flinkt claims it as tested. The same pull request runs the key-hash checks with every stable release between the previous build compiler and the new one, so no release in the range is unmeasured. A scheduled job may notice the release and open that pull request, but it never changes what CI tests on its own. Raising the minimum is a policy change made here, with its reason.
 
-**KSP.** KSP versions don't follow Kotlin versions any more. KSP 2.3.12 and 2.3.13 ran a probe processor and compiled its generated code with the Kotlin Gradle plugin at 2.3.21, 2.4.0, 2.4.20, 2.4.21 and 2.5.0-RC. Flinkt pins one KSP version in its build and tests the processor with it, and the support table names it once the build exists. Other KSP versions are untested.
+**KSP.** KSP versions don't follow Kotlin versions any more. KSP 2.3.12 and 2.3.13 ran a probe processor and compiled its generated code with the Kotlin Gradle plugin at 2.3.21, 2.4.0, 2.4.20, 2.4.21 and 2.5.0-RC. Flinkt pins one KSP version in its build, 2.3.13, and tests the processor with it ([Support table](#support-table)). Other KSP versions are untested.
 
 ## Enforcement and its limits
 
