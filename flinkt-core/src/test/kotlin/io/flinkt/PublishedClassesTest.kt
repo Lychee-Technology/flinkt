@@ -29,4 +29,44 @@ class PublishedClassesTest {
             )
             .assertSuccess()
     }
+
+    @ParameterizedTest
+    @EnumSource(KotlinCompiler::class)
+    fun `code like the generated code compiles against the SPI`(compiler: KotlinCompiler) {
+        KotlinCompilation(compiler)
+            .compile(
+                """
+                import io.flinkt.FlinkType
+                import io.flinkt.codec.GeneratedCodec
+                import io.flinkt.codec.codec
+                import io.flinkt.registry.GeneratedTypeModule
+                import io.flinkt.registry.MutableTypeRegistry
+                import io.flinkt.schema.FieldSchema
+                import io.flinkt.schema.RecordSchema
+                import io.flinkt.schema.SchemaType
+                import java.io.DataInput
+                import java.io.DataOutput
+
+                @FlinkType
+                data class User(val id: Long)
+
+                @FlinkType
+                data class Order(val user: User)
+
+                class OrderCodec(private val user: GeneratedCodec<User>) : GeneratedCodec<Order> {
+                    override fun serialize(value: Order, output: DataOutput) = user.serialize(value.user, output)
+                    override fun deserialize(input: DataInput): Order = Order(user.deserialize(input))
+                    override fun copy(value: Order): Order = Order(user.copy(value.user))
+                }
+
+                class ModelTypes : GeneratedTypeModule {
+                    override fun register(registry: MutableTypeRegistry) {
+                        val schema = RecordSchema("Order", listOf(FieldSchema("user", SchemaType.ClassType("User"))))
+                        registry.register(Order::class, schema) { context -> OrderCodec(context.codec()) }
+                    }
+                }
+                """,
+            )
+            .assertSuccess()
+    }
 }

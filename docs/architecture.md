@@ -196,6 +196,37 @@ Generated code never subclasses a Flink class. The Flink protocol classes differ
 
 A consuming module reuses generated metadata from its dependencies and doesn't regenerate code for classes it doesn't own.
 
+## Type model and registry
+
+Implemented in [#6](https://github.com/Lychee-Technology/flinkt/issues/6), in `flinkt-core`.
+
+A Kotlin type reaches a codec in two steps, and `TypeRegistry` keeps them apart:
+
+```text
+KType (typeOf<T>())
+    │  model(type): structural analysis, for every type Kotlin can express
+    ▼
+FlinktType               classifier, arguments with variance, nullability at every level, each node's shape
+    │  codec(type): supported resolution
+    ▼
+GeneratedCodec<T>        or UnsupportedTypeException naming the canonical type and the reason
+```
+
+**The model represents; resolution supports.** Analysis models every planned shape from the start: built-ins, `List` and `Map` and the collection types Flinkt rejects, generated records, value classes, enums, sealed hierarchies, objects, type parameters, and any other class by its classifier only. A shape that a release doesn't support yet is still modeled and fails in resolution, so each later shape changes a resolution branch, not the model. Analysis reads only what `KType` carries without `kotlin-reflect`. A generated declaration's shape comes from the schema its module registered, because `typeOf<T>()` can't tell a sealed class or a value class apart without `kotlin-reflect`.
+
+**Canonical form.** A model's `toString()` is the Kotlin type with qualified names, every argument and every `?`, such as `kotlin.collections.Map<com.example.UserId, kotlin.collections.List<com.example.Event?>>`. Errors use it. `KType` has no type aliases or source spelling, so the form doesn't either. Equal `KType`s give equal models. A platform type from Java is modeled as non-null, and a Java collection, `(Mutable)List<T>!`, as the read-only `List<T>`. `MutableList<T>` and `List<T>` have the same classifier, so the analyzer tells them apart the only way `KType` allows, by equality: it rebuilds the mutable type from the classifier and arguments through `kotlin.jvm.internal.Reflection`, the factory compiled `typeOf` calls use, and compares. With `kotlin-reflect` present that factory builds `kotlin-reflect`'s types, so the comparison doesn't depend on which implementation the application has. #17 tests both configurations ([Collections](#collections)).
+
+**Codec SPI.** `GeneratedCodec<T>` reads and writes through `DataInput` and `DataOutput` and copies. A codec holds no state that changes between calls. A `CodecFactory` creates it when the type is resolved, and gets a `CodecContext` with the codecs of the type's arguments and a way to resolve the codecs of the types its values contain. The context is valid only while the factory runs, so a record's codec fixes its nested codecs at creation and never looks one up per value. Core holds no byte layout, and that includes the scalars: a built-in type resolves to the codec a module registers for it with `registerBuiltIn`, because how each scalar is written is #5's decision and the generated codecs have to agree with it. A type whose codec would need itself fails until recursive types are supported.
+
+**Registry.** `TypeRegistry.load(classLoader)` builds a registry from the `GeneratedTypeModule`s that `java.util.ServiceLoader` finds through the class loader the caller supplies. Flink loads each job's code in a class loader of its own and can run several jobs in one JVM, so:
+
+- a generated type is identified by its `Class` object, never by its name. Two classes with the same name in two user-code class loaders are two types, and a lookup in one registry never returns the other's codec;
+- each `load` builds a new registry, and nothing is cached in a static field. A static map from class name to codec would turn a cache into JVM-wide type identity, and it would keep a finished job's class loader reachable. The adapter decides how long a registry lives ([#24](https://github.com/Lychee-Technology/flinkt/issues/24) tests the lifecycle).
+
+A type registered twice fails the registry, with an error naming both modules. `@FlinkType` has runtime retention: a consumer's KSP reads it from a dependency jar, and resolution reads it to tell an annotated class whose module wasn't found from a class that isn't annotated.
+
+**Schema model.** A module registers each declaration's schema with its codec factory: a record's fields in primary-constructor order with their names and full types, a value class's underlying property, an enum's constants and a sealed type's subtypes with their `@FlinkId`s, and type parameters. A schema names types by strings, never by `Class`, so a schema read back from a snapshot can describe a type the current classpath doesn't have. A declaration is named by its JVM class name, and a type Kotlin maps to a Java class by its Kotlin name, which is what tells `List` from `MutableList`. What a snapshot persists of it is #5's decision.
+
 ## State helpers
 
 Two helper families have different names because they return different things:

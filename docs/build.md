@@ -6,14 +6,14 @@ This page records how Flinkt is built and why: the module layout, the toolchain,
 
 | Module | Directory | Published | Holds |
 |---|---|---|---|
-| `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`. Later the type model, codec SPI, persisted schema and planner. Kotlin stdlib only |
+| `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`, the type model, the codec SPI, the schema model and the generated-type registry. Later the planner. Kotlin stdlib only |
 | `flinkt-ksp` | `flinkt-ksp/` | yes | the KSP processor (no code yet) |
 | `flinkt-view-codegen` | `flinkt-view-codegen/` | no | the forwarder generator for Flinkt's own build (no code yet) |
 | `flinkt-flink23` | `adapters/flinkt-flink23/` | yes | the Flink 2.3 adapter, primary |
 | `flinkt-flink120` | `adapters/flinkt-flink120/` | yes | the Flink 1.20 adapter |
 | `test-support` | `test-support/` | no | the exact-type carrier and the compile-test harness |
 
-Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). The production code is only what the checks below need: `@FlinkType` gives the ABI dump and the compile tests a public declaration, and each adapter's line constant gives the shared source a per-line symbol to compile against.
+Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
 
 ### Adapters
 

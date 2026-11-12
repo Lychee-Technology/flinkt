@@ -1,3 +1,278 @@
 public abstract interface annotation class io/flinkt/FlinkType : java/lang/annotation/Annotation {
 }
 
+public abstract interface class io/flinkt/codec/CodecContext {
+	public abstract fun codec (Lkotlin/reflect/KType;)Lio/flinkt/codec/GeneratedCodec;
+	public abstract fun getArgumentCodecs ()Ljava/util/List;
+	public abstract fun getType ()Lio/flinkt/types/FlinktType;
+}
+
+public abstract interface class io/flinkt/codec/CodecFactory {
+	public abstract fun create (Lio/flinkt/codec/CodecContext;)Lio/flinkt/codec/GeneratedCodec;
+}
+
+public abstract interface class io/flinkt/codec/GeneratedCodec {
+	public abstract fun copy (Ljava/lang/Object;)Ljava/lang/Object;
+	public abstract fun deserialize (Ljava/io/DataInput;)Ljava/lang/Object;
+	public abstract fun serialize (Ljava/lang/Object;Ljava/io/DataOutput;)V
+}
+
+public final class io/flinkt/registry/GeneratedDeclaration {
+	public final fun getCodecFactory ()Lio/flinkt/codec/CodecFactory;
+	public final fun getModule ()Lio/flinkt/registry/GeneratedTypeModule;
+	public final fun getSchema ()Lio/flinkt/schema/DeclarationSchema;
+	public final fun getType ()Lkotlin/reflect/KClass;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class io/flinkt/registry/GeneratedTypeModule {
+	public abstract fun register (Lio/flinkt/registry/MutableTypeRegistry;)V
+}
+
+public abstract interface class io/flinkt/registry/MutableTypeRegistry {
+	public abstract fun register (Lkotlin/reflect/KClass;Lio/flinkt/schema/DeclarationSchema;Lio/flinkt/codec/CodecFactory;)V
+	public abstract fun registerBuiltIn (Lio/flinkt/types/BuiltInKind;Lio/flinkt/codec/CodecFactory;)V
+}
+
+public final class io/flinkt/registry/TypeRegistry {
+	public static final field Companion Lio/flinkt/registry/TypeRegistry$Companion;
+	public final fun codec (Lio/flinkt/types/FlinktType;)Lio/flinkt/codec/GeneratedCodec;
+	public final fun codec (Lkotlin/reflect/KType;)Lio/flinkt/codec/GeneratedCodec;
+	public final fun declaration (Ljava/lang/Class;)Lio/flinkt/registry/GeneratedDeclaration;
+	public final fun declaration (Lkotlin/reflect/KClass;)Lio/flinkt/registry/GeneratedDeclaration;
+	public final fun getDeclarations ()Ljava/util/List;
+	public final fun getModules ()Ljava/util/List;
+	public final fun model (Lkotlin/reflect/KType;)Lio/flinkt/types/FlinktType;
+}
+
+public final class io/flinkt/registry/TypeRegistry$Companion {
+	public final fun load (Ljava/lang/ClassLoader;)Lio/flinkt/registry/TypeRegistry;
+	public final fun of (Ljava/lang/Iterable;)Lio/flinkt/registry/TypeRegistry;
+	public final fun of ([Lio/flinkt/registry/GeneratedTypeModule;)Lio/flinkt/registry/TypeRegistry;
+}
+
+public abstract class io/flinkt/schema/DeclarationSchema {
+	public abstract fun getTypeName ()Ljava/lang/String;
+	public abstract fun getTypeParameters ()Ljava/util/List;
+}
+
+public final class io/flinkt/schema/EnumConstantSchema {
+	public fun <init> (Ljava/lang/String;I)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()I
+	public final fun getName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/EnumSchema : io/flinkt/schema/DeclarationSchema {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConstants ()Ljava/util/List;
+	public fun getTypeName ()Ljava/lang/String;
+	public fun getTypeParameters ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/FieldSchema {
+	public fun <init> (Ljava/lang/String;Lio/flinkt/schema/SchemaType;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public final fun getType ()Lio/flinkt/schema/SchemaType;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/ObjectSchema : io/flinkt/schema/DeclarationSchema {
+	public fun <init> (Ljava/lang/String;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getTypeName ()Ljava/lang/String;
+	public fun getTypeParameters ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/RecordSchema : io/flinkt/schema/DeclarationSchema {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFields ()Ljava/util/List;
+	public fun getTypeName ()Ljava/lang/String;
+	public fun getTypeParameters ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class io/flinkt/schema/SchemaType {
+	public abstract fun isNullable ()Z
+}
+
+public final class io/flinkt/schema/SchemaType$ClassType : io/flinkt/schema/SchemaType {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getArguments ()Ljava/util/List;
+	public final fun getName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun isNullable ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/SchemaType$TypeParameter : io/flinkt/schema/SchemaType {
+	public fun <init> (Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun isNullable ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/SchemaTypeArgument {
+	public static final field Companion Lio/flinkt/schema/SchemaTypeArgument$Companion;
+	public fun <init> (Lkotlin/reflect/KVariance;Lio/flinkt/schema/SchemaType;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getType ()Lio/flinkt/schema/SchemaType;
+	public final fun getVariance ()Lkotlin/reflect/KVariance;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/SchemaTypeArgument$Companion {
+	public final fun getSTAR ()Lio/flinkt/schema/SchemaTypeArgument;
+	public final fun invariant (Lio/flinkt/schema/SchemaType;)Lio/flinkt/schema/SchemaTypeArgument;
+}
+
+public final class io/flinkt/schema/SealedSchema : io/flinkt/schema/DeclarationSchema {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSubtypes ()Ljava/util/List;
+	public fun getTypeName ()Ljava/lang/String;
+	public fun getTypeParameters ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/SealedSubtypeSchema {
+	public fun <init> (ILio/flinkt/schema/SchemaType$ClassType;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()I
+	public final fun getType ()Lio/flinkt/schema/SchemaType$ClassType;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/schema/ValueClassSchema : io/flinkt/schema/DeclarationSchema {
+	public fun <init> (Ljava/lang/String;Lio/flinkt/schema/FieldSchema;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Lio/flinkt/schema/FieldSchema;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getTypeName ()Ljava/lang/String;
+	public fun getTypeParameters ()Ljava/util/List;
+	public final fun getUnderlying ()Lio/flinkt/schema/FieldSchema;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/BuiltInKind : java/lang/Enum {
+	public static final field BOOLEAN Lio/flinkt/types/BuiltInKind;
+	public static final field BYTE Lio/flinkt/types/BuiltInKind;
+	public static final field CHAR Lio/flinkt/types/BuiltInKind;
+	public static final field DOUBLE Lio/flinkt/types/BuiltInKind;
+	public static final field FLOAT Lio/flinkt/types/BuiltInKind;
+	public static final field INT Lio/flinkt/types/BuiltInKind;
+	public static final field LONG Lio/flinkt/types/BuiltInKind;
+	public static final field SHORT Lio/flinkt/types/BuiltInKind;
+	public static final field STRING Lio/flinkt/types/BuiltInKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getJvmClass ()Ljava/lang/Class;
+	public final fun getKotlinName ()Ljava/lang/String;
+	public static fun valueOf (Ljava/lang/String;)Lio/flinkt/types/BuiltInKind;
+	public static fun values ()[Lio/flinkt/types/BuiltInKind;
+}
+
+public final class io/flinkt/types/CollectionKind : java/lang/Enum {
+	public static final field ARRAY Lio/flinkt/types/CollectionKind;
+	public static final field COLLECTION Lio/flinkt/types/CollectionKind;
+	public static final field ITERABLE Lio/flinkt/types/CollectionKind;
+	public static final field LIST Lio/flinkt/types/CollectionKind;
+	public static final field MAP Lio/flinkt/types/CollectionKind;
+	public static final field MUTABLE_COLLECTION Lio/flinkt/types/CollectionKind;
+	public static final field MUTABLE_ITERABLE Lio/flinkt/types/CollectionKind;
+	public static final field MUTABLE_LIST Lio/flinkt/types/CollectionKind;
+	public static final field MUTABLE_MAP Lio/flinkt/types/CollectionKind;
+	public static final field MUTABLE_SET Lio/flinkt/types/CollectionKind;
+	public static final field PRIMITIVE_ARRAY Lio/flinkt/types/CollectionKind;
+	public static final field SET Lio/flinkt/types/CollectionKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getKotlinName ()Ljava/lang/String;
+	public static fun valueOf (Ljava/lang/String;)Lio/flinkt/types/CollectionKind;
+	public static fun values ()[Lio/flinkt/types/CollectionKind;
+}
+
+public final class io/flinkt/types/FlinktType {
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getArguments ()Ljava/util/List;
+	public final fun getClassifierName ()Ljava/lang/String;
+	public final fun getJvmClass ()Ljava/lang/Class;
+	public final fun getShape ()Lio/flinkt/types/TypeShape;
+	public fun hashCode ()I
+	public final fun isNullable ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/TypeArgument {
+	public static final field Companion Lio/flinkt/types/TypeArgument$Companion;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getType ()Lio/flinkt/types/FlinktType;
+	public final fun getVariance ()Lkotlin/reflect/KVariance;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/TypeArgument$Companion {
+	public final fun getSTAR ()Lio/flinkt/types/TypeArgument;
+}
+
+public abstract class io/flinkt/types/TypeShape {
+}
+
+public final class io/flinkt/types/TypeShape$BuiltIn : io/flinkt/types/TypeShape {
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKind ()Lio/flinkt/types/BuiltInKind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/TypeShape$ClassifierOnly : io/flinkt/types/TypeShape {
+	public static final field INSTANCE Lio/flinkt/types/TypeShape$ClassifierOnly;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/TypeShape$Collection : io/flinkt/types/TypeShape {
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKind ()Lio/flinkt/types/CollectionKind;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/TypeShape$Generated : io/flinkt/types/TypeShape {
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getSchema ()Lio/flinkt/schema/DeclarationSchema;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/TypeShape$TypeParameter : io/flinkt/types/TypeShape {
+	public static final field INSTANCE Lio/flinkt/types/TypeShape$TypeParameter;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/types/UnsupportedTypeException : java/lang/IllegalArgumentException {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCanonicalType ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+}
+
