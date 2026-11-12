@@ -627,7 +627,7 @@ For ordinary persisted values, such as a `ValueState` value, a `ListState` eleme
 | the class renamed or moved to another package | incompatible |
 | a nested record, `List` element or `Map` value changes | the same rules, recursively |
 
-An added nullable field starts as `null`. Any other added field needs a migration default that its declaration states, because Kotlin has nothing like Java's default for a non-null `String`, an enum or a validated value class. A default argument in the constructor isn't used, because it can compute a different value on each restore ([#37](https://github.com/Lychee-Technology/flinkt/issues/37)).
+Which added fields get a migration default is still open ([#37](https://github.com/Lychee-Technology/flinkt/issues/37)). The candidates are `null` for a nullable field and a default that the declaration states. Whether a non-null type such as `Int` or `Boolean` gets an intrinsic default like `0` or `false` is part of that decision. A non-null `String`, an enum or a validated value class has nothing like Java's default, so it needs a stated default. A default argument in the constructor isn't used, because it can compute a different value on each restore.
 
 Migration is built in stages. A change stays incompatible until the stage that supports it lands with its evidence, and restore then stops with an error instead of reading state it might misinterpret. [Stages](docs/schema-evolution.md#stages) says which changes each stage enables. Renaming or reordering enum constants and sealed subtypes that keep their IDs isn't a change. Adding or removing one is incompatible, and so is giving an existing name another ID.
 
