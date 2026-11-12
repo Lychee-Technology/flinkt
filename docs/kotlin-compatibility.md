@@ -8,9 +8,9 @@ Kotlin support is independent of the Flink line. Every Flink adapter supports th
 
 1. The minimum supported Kotlin compiler is 2.4.0. It applies to every compilation that uses a Flinkt API or runs `flinkt-ksp`.
 2. Kotlin 1.x and 2.0 through 2.3 are unsupported. Flinkt has no fallback code for them, and neither CI nor contributors compile, probe or test with them. A question about how an older compiler behaves is out of scope, not open.
-3. A Kotlin release later than the newest tested one isn't supported until a reviewed pull request adds it and CI passes with it, including the key-hash pins. Pre-releases (Beta, RC) are never supported.
+3. A Kotlin release later than the newest tested one isn't supported until a reviewed pull request adds it and CI passes with it, including the key-hash checks. Pre-releases (Beta, RC) are never supported.
 4. `flinkt-ksp` warns when a compilation's language version is below 2.4. That is the only form of the compiler requirement that the processor can see, and it's a warning, not an error, because it can't tell an unsupported compiler from a supported one set to an older language version ([Enforcement and its limits](#enforcement-and-its-limits)).
-5. Serializer compatibility doesn't depend on the compiler. Key identity does, which is why a Kotlin upgrade has to pass the key-hash pins before Flinkt lists it.
+5. Serializer compatibility doesn't depend on the compiler. Key identity does, which is why a Kotlin upgrade has to pass the key-hash checks before Flinkt lists it.
 
 ## Support table
 
@@ -23,7 +23,7 @@ Status as of November 11, 2026. Flinkt has no build or release yet, so it claims
 | 2.4.10, 2.4.20, 2.4.21 | In the target range. Not yet tested by Flinkt CI | Key hashes and key groups measured, identical to 2.4.0 |
 | later releases, including 2.5.0 | Not supported until added | 2.5.0-RC measured, identical hashes. A pre-release is never supported |
 
-When the build exists, the table lists the minimum and the newest tested release as pinned versions. A supported release is any stable release between them, each of which has passed the key-hash pins ([What CI tests](#what-ci-tests)).
+When the build exists, the table lists the minimum and the newest tested release as pinned versions. A supported release is any stable release between them, each of which has passed the key-hash checks ([What CI tests](#what-ci-tests)).
 
 ## Four kinds of compatibility
 
@@ -52,9 +52,9 @@ The other kinds measured were `Byte`, `Short`, `Int`, `Long`, `Double` (includin
 
 The rules that follow:
 
-- **A Kotlin version is listed as tested only after the key-hash pins pass with key classes compiled by it** ([#32](https://github.com/Lychee-Technology/flinkt/issues/32), [Comparator and key semantics](testing.md#comparator-and-key-semantics)). The pins are constants. A version that produces a different value fails them, and nobody updates the constants to make it pass.
+- **A Kotlin version is listed as tested only after the key-hash checks pass with key classes compiled by it** ([#32](https://github.com/Lychee-Technology/flinkt/issues/32), [Comparator and key semantics](testing.md#comparator-and-key-semantics)). There are two. The pins are constants: the hash codes and key groups of at least one key per eligible component kind. The formula checks compare the generated `hashCode()` of every supported key shape, over boundary values of each component kind, with a value that the test computes from the key's components by a formula specified independently of the compiler. A version that produces a different value fails them, and nobody updates the constants or the expected formula to make it pass.
 - **A version whose generated `hashCode()` differs is not a safe upgrade for keyed state.** It isn't added to the tested range. If Kotlin ever changes the formula, the pull request that finds it records the version here as unsupported for jobs with keyed state under a data-class or value-class key, with the measured difference, and the release notes say so. Flinkt never presents such an upgrade as compatible because the serializer snapshot still resolves.
-- Upgrading Kotlin between two tested versions keeps every key in its key group. Upgrading to a version outside the tested range is untested for key identity, whatever its serializer compatibility.
+- **What a tested upgrade promises.** Kotlin's contract for a generated `hashCode()` is consistency with `equals()`. It doesn't promise the same value from another compiler version, and no finite test can prove that two compilers hash every possible key alike. So the claim is a tested compatibility contract, not a proof: upgrading Kotlin between two tested versions keeps a key in its key group for every key shape and value kind that the pins and formula checks cover. A compiler change confined to a value or composition they don't exercise would pass them. The formula checks narrow that gap beyond what sample pins can, and they run only in CI, so they add no per-record cost. Upgrading to a version outside the tested range is untested for key identity, whatever its serializer compatibility.
 
 ### Historical evidence: Kotlin 1.4.32
 
@@ -65,11 +65,11 @@ Compiled by Kotlin 1.4.32, a `Boolean` component contributes 1 or 0 to a data cl
 Two compilers, not a matrix. Both versions are pinned in a committed file, as Flink versions are, and no lane resolves a dynamic version such as `2.4.+`.
 
 - **The build compiler** is the newest tested 2.4.x or later release. It builds Flinkt, and every suite runs on it.
-- **The minimum, 2.4.0,** compiles the code that stands for user code against Flinkt as built: KSP compilation and negative compilation tests, the key classes of the hash pins, and the integration job. That catches a published API, a generated source or a processor behavior that needs a compiler newer than 2.4.0.
+- **The minimum, 2.4.0,** compiles the code that stands for user code against Flinkt as built: KSP compilation and negative compilation tests, the key classes of the key-hash checks, and the integration job. That catches a published API, a generated source or a processor behavior that needs a compiler newer than 2.4.0.
 
-Which tier runs what is in [CI tiers](testing.md#ci-tiers). Releases between the two pinned versions don't each get a lane. They get the hash pins once, when they enter the range, and the range is narrowed if one is found to differ.
+Which tier runs what is in [CI tiers](testing.md#ci-tiers). Releases between the two pinned versions don't each get a lane. They get the key-hash checks once, when they enter the range, and the range is narrowed if one is found to differ.
 
-Adopting a new Kotlin release is a reviewed pull request that moves the pinned build compiler and passes every lane, the hash pins included, before Flinkt claims it as tested. The same pull request runs the hash pins with every stable release between the previous build compiler and the new one, so no release in the range is unmeasured. A scheduled job may notice the release and open that pull request, but it never changes what CI tests on its own. Raising the minimum is a policy change made here, with its reason.
+Adopting a new Kotlin release is a reviewed pull request that moves the pinned build compiler and passes every lane, the key-hash checks included, before Flinkt claims it as tested. The same pull request runs the key-hash checks with every stable release between the previous build compiler and the new one, so no release in the range is unmeasured. A scheduled job may notice the release and open that pull request, but it never changes what CI tests on its own. Raising the minimum is a policy change made here, with its reason.
 
 **KSP.** KSP versions don't follow Kotlin versions any more. KSP 2.3.12 and 2.3.13 ran a probe processor and compiled its generated code with the Kotlin Gradle plugin at 2.3.21, 2.4.0, 2.4.20, 2.4.21 and 2.5.0-RC. Flinkt pins one KSP version in its build and tests the processor with it, and the support table names it once the build exists. Other KSP versions are untested.
 
@@ -83,8 +83,14 @@ Flinkt can stop or warn about most unsupported compilers, but it can't prove whi
 
 A class's `@Metadata` can't identify its compiler either. Its metadata version follows the language version: 2.4.20 with language version 2.0 writes 2.0.0, and 2.3.21 with language version 2.4 writes 2.4.0.
 
-The warning matters most for keys. Every key class whose hash depends on the Kotlin compiler is a `@FlinkType` data class or value class, so `flinkt-ksp` runs in the compilation that builds it. Built-in keys hash through the JDK. A build that ignores the warning, or a key class built by an unsupported compiler that claims a supported language version, is outside the policy. The hash pins cover only the compilers CI runs, so nothing would catch a different formula there.
+The warning matters most for keys. Every key class whose hash depends on the Kotlin compiler is a `@FlinkType` data class or value class, so `flinkt-ksp` runs in the compilation that builds it. Built-in keys hash through the JDK. A build that ignores the warning, or a key class built by an unsupported compiler that claims a supported language version, is outside the policy. The key-hash checks cover only the compilers CI runs, so nothing would catch a different formula there.
 
-## Open questions
+### No runtime formula check
 
-- **A runtime formula check.** Generated code could compare a key's `hashCode()` with the formula Flinkt expects, over the key's own components, when the view's `keyBy` or `runtimeContext.mapState` checks eligibility. That would catch a compiler with a different formula whatever version it reports. It adds generated code to every key type and hasn't been decided.
+A runtime check was considered: generated code comparing a key's `hashCode()` with the formula Flinkt expects when the view's `keyBy` or `runtimeContext.mapState` checks eligibility. The first release has none. Generated code doesn't check the hash formula, per record or otherwise, and the key rules for each role from [#23](https://github.com/Lychee-Technology/flinkt/issues/23) stay as decided ([Keys](architecture.md#keys)).
+
+- **The eligibility checks have no key.** The view's `keyBy` checks at graph build and `runtimeContext.mapState` in `open()`. Each sees a key selector, or a type and a descriptor, and no key instance exists yet. Building sample keys would run user code, such as an `init` block, and still wouldn't cover every value.
+- **Checking real keys costs every record and still leaves gaps.** It would mean wrapping the key selector, which adds work to the hot path and covers only the keys a job happens to see. A key reached through `asFlink()`, a descriptor passed to raw Flink or a `TypeInformation` that Flinkt didn't build would still bypass it.
+- **Keyed `MapState` user keys don't choose a key group.** Flink derives key groups from the partition key only, so one guard for both roles would apply a partition-key concern where it doesn't hold.
+
+Compiler adoption in CI is the safeguard instead ([What CI tests](#what-ci-tests)), with the limit stated above: Flinkt can't verify which compiler built each key class in a user's job. A future runtime check needs its own issue, naming the enforcement point, what it covers, how it fails, which escape hatches it reaches and its performance budget.
