@@ -3,8 +3,11 @@ package io.flinkt.flink
 import io.flinkt.FlinkType
 import io.flinkt.codec.CodecFactory
 import io.flinkt.codec.GeneratedCodec
+import io.flinkt.codec.codec
 import io.flinkt.registry.GeneratedTypeModule
 import io.flinkt.registry.MutableTypeRegistry
+import io.flinkt.registry.TypeRegistry
+import io.flinkt.registry.resolve
 import io.flinkt.schema.FieldSchema
 import io.flinkt.schema.RecordSchema
 import io.flinkt.schema.SchemaType
@@ -20,6 +23,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.Date
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 import org.apache.flink.api.common.ExecutionConfig
@@ -154,17 +158,48 @@ class TypeInfoTest {
     }
 
     @Test
-    fun `a generated type that a module on the context class loader registers fails explicitly`() {
+    fun `a generated type that a module on the context class loader registers fails with both fixes`() {
         val loader = withServices(RegisteredTypes::class.java.name)
 
         val e = withContextClassLoader(loader) { assertThrows<UnsupportedTypeException> { typeInfo<Registered>() } }
         assertEquals(
             "Flinkt can't resolve io.flinkt.flink.TypeInfoTest.Registered: it's a generated type, and typeInfo() has " +
-                "no TypeInformation for a generated type yet. Pass a TypeInformation explicitly",
+                "no TypeInformation for a generated type yet. Of the two fixes, annotating the type with @FlinkType " +
+                "or passing a TypeInformation explicitly, the annotation is already there and gives it no " +
+                "TypeInformation in this release, so pass a TypeInformation explicitly",
             e.message,
         )
+        assertEquals("io.flinkt.flink.TypeInfoTest.Registered", e.canonicalType)
+        // A nullable generated type gets the same message, not the nullable one, whose first fix it already has.
+        val nullable = withContextClassLoader(loader) {
+            assertThrows<UnsupportedTypeException> { typeInfo<Registered?>() }
+        }
+        assertEquals(generatedMessage("io.flinkt.flink.TypeInfoTest.Registered?"), nullable.message)
         // A registry with generated types still gives Flink's own TypeInformation for a built-in.
         assertSame(BasicTypeInfo.LONG_TYPE_INFO, withContextClassLoader(loader) { typeInfo<Long>() })
+    }
+
+    @Test
+    fun `a generated type fails before its module's codec factory runs`() {
+        val loader = withServices(FactoryTypes::class.java.name)
+        factoryRuns.set(0)
+
+        // Its factory asks for the codec of a nullable type, which would fail with that nested type's reason.
+        val nested = withContextClassLoader(loader) {
+            assertThrows<UnsupportedTypeException> { typeInfo<NestedNullable>() }
+        }
+        assertEquals(generatedMessage("io.flinkt.flink.TypeInfoTest.NestedNullable"), nested.message)
+        // Its factory throws an IllegalStateException, which would escape typeInfo() as it is.
+        val failing = withContextClassLoader(loader) {
+            assertThrows<UnsupportedTypeException> { typeInfo<FailingFactory>() }
+        }
+        assertEquals(generatedMessage("io.flinkt.flink.TypeInfoTest.FailingFactory"), failing.message)
+        assertEquals(0, factoryRuns.get(), "no codec factory ran")
+
+        // The control: core's resolution of the same type runs its factory, and the factory's exception escapes.
+        val control = assertThrows<IllegalStateException> { TypeRegistry.of(FactoryTypes()).resolve<FailingFactory>() }
+        assertEquals("FailingFactory's codec factory ran", control.message)
+        assertEquals(1, factoryRuns.get())
     }
 
     @Test
@@ -209,6 +244,49 @@ class TypeInfoTest {
         override fun copy(value: Registered): Registered = value
     }
 
+    @FlinkType
+    data class NestedNullable(val id: Long?)
+
+    @FlinkType
+    data class FailingFactory(val id: Long)
+
+    /**
+     * Registers two records whose codec factories count their runs in [factoryRuns] and fail: [NestedNullable]'s asks
+     * for the codec of a nullable type, and [FailingFactory]'s throws an `IllegalStateException`.
+     */
+    class FactoryTypes : GeneratedTypeModule {
+        override fun register(registry: MutableTypeRegistry) {
+            registry.register(
+                NestedNullable::class,
+                RecordSchema(
+                    NestedNullable::class.java.name,
+                    listOf(FieldSchema("id", SchemaType.ClassType("kotlin.Long", isNullable = true))),
+                ),
+                CodecFactory { context ->
+                    factoryRuns.incrementAndGet()
+                    context.codec<Long?>()
+                    error("unreachable: a nullable type has no codec")
+                },
+            )
+            registry.register(
+                FailingFactory::class,
+                RecordSchema(
+                    FailingFactory::class.java.name,
+                    listOf(FieldSchema("id", SchemaType.ClassType("kotlin.Long"))),
+                ),
+                CodecFactory {
+                    factoryRuns.incrementAndGet()
+                    error("FailingFactory's codec factory ran")
+                },
+            )
+        }
+    }
+
+    /** The message of a generated [type], which gives both fixes and says the annotation is already there. */
+    private fun generatedMessage(type: String): String =
+        "Flinkt can't resolve $type: it's a generated type, and typeInfo() has no TypeInformation for a generated " +
+            "type yet. $GENERATED_FIXES"
+
     /** A class loader that lists [providers] as `GeneratedTypeModule`s, over the test's own. */
     private fun withServices(vararg providers: String): ClassLoader {
         val file = dir.resolve("META-INF/services/${GeneratedTypeModule::class.java.name}")
@@ -246,6 +324,15 @@ class TypeInfoTest {
         /** The fixes every unsupported type's message ends with. */
         const val FIXES: String =
             "To give Flink a TypeInformation for it, annotate the type with @FlinkType, or pass a TypeInformation explicitly"
+
+        /** The fixes a generated type's message ends with: both, and which one works for it in this release. */
+        const val GENERATED_FIXES: String =
+            "Of the two fixes, annotating the type with @FlinkType or passing a TypeInformation explicitly, the " +
+                "annotation is already there and gives it no TypeInformation in this release, so pass a " +
+                "TypeInformation explicitly"
+
+        /** How many times [FactoryTypes]' codec factories ran. */
+        val factoryRuns: AtomicInteger = AtomicInteger()
 
         val builtIns: List<BuiltIn> = listOf(
             BuiltIn(BuiltInKind.BOOLEAN, typeInfo<Boolean>(), BasicTypeInfo.BOOLEAN_TYPE_INFO, BooleanSerializer::class.java),
