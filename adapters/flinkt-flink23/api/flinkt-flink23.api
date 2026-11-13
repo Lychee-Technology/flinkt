@@ -1,6 +1,47 @@
 public abstract interface annotation class io/flinkt/flink/ExperimentalFlinkApi : java/lang/annotation/Annotation {
 }
 
+public class io/flinkt/flink/FlinktDataStream : io/flinkt/flink/FlinktDataStreamForwarders {
+	public fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public final fun keyBy (Lorg/apache/flink/api/java/functions/KeySelector;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lio/flinkt/flink/FlinktKeyedStream;
+	public final fun map (Lorg/apache/flink/api/common/functions/MapFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+}
+
+public abstract interface class io/flinkt/flink/FlinktDataStreamForwarders {
+	public abstract fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+}
+
+public final class io/flinkt/flink/FlinktKeyedStream : io/flinkt/flink/FlinktDataStream, io/flinkt/flink/FlinktKeyedStreamForwarders {
+	public synthetic fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public fun asFlink ()Lorg/apache/flink/streaming/api/datastream/KeyedStream;
+	public final fun process (Lorg/apache/flink/streaming/api/functions/KeyedProcessFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+}
+
+public abstract interface class io/flinkt/flink/FlinktKeyedStreamForwarders : io/flinkt/flink/FlinktDataStreamForwarders {
+	public synthetic fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public abstract fun asFlink ()Lorg/apache/flink/streaming/api/datastream/KeyedStream;
+}
+
+public final class io/flinkt/flink/FlinktKt {
+	public static final fun flinkt (Lorg/apache/flink/streaming/api/datastream/DataStream;)Lio/flinkt/flink/FlinktDataStream;
+	public static final fun flinkt (Lorg/apache/flink/streaming/api/datastream/KeyedStream;)Lio/flinkt/flink/FlinktKeyedStream;
+	public static final fun flinkt (Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+}
+
+public final class io/flinkt/flink/FlinktSingleOutputStreamOperator : io/flinkt/flink/FlinktDataStream, io/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders {
+	public synthetic fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public fun asFlink ()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;
+}
+
+public abstract interface class io/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders : io/flinkt/flink/FlinktDataStreamForwarders {
+	public synthetic fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public abstract fun asFlink ()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;
+}
+
+public final class io/flinkt/flink/KeyTypesKt {
+	public static final fun keyTypeInfo (Lkotlin/reflect/KType;)Lorg/apache/flink/api/common/typeinfo/TypeInformation;
+}
+
 public final class io/flinkt/flink/TypeInfoKt {
 	public static final fun typeInfo (Lkotlin/reflect/KType;)Lorg/apache/flink/api/common/typeinfo/TypeInformation;
 }

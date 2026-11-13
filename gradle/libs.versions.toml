@@ -14,7 +14,8 @@ kotlin = "2.4.21"
 kotlin-minimum = "2.4.0"
 # KSP, pinned once for the whole build. Tested with Kotlin 2.4.0 through 2.4.21.
 ksp = "2.3.13"
-# Reads Flink's class files for the parameter names of the view forwarders (flinkt-view-codegen). Build time only.
+# Reads Flink's class files for the parameter names of the view forwarders (flinkt-view-codegen), and the views' and
+# Flink's class files in the adapters' structural tests. Build time only.
 asm = "9.11.1"
 # One Flink release per adapter line. The adapter compiles against it and tests run on it.
 flink23 = "2.3.0"

@@ -43,6 +43,10 @@ dependencies {
         attributes { attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, catalog.version("jdk").toInt()) }
     }
     "compileTestModule"(project(":flinkt-view-codegen"))
+
+    // The views' structural tests read class files: the views', for what hand-written code calls and reifies, and
+    // Flink's, for the stability annotations that 1.20 keeps only there (class retention).
+    "testImplementation"(catalog.library("asm-tree"))
 }
 
 // The view generator's inputs (docs/architecture.md#parameter-names): the names file checked in next to this build

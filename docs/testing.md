@@ -479,7 +479,7 @@ Compile contracts show which static type a call returns. They can't show that th
 - nodes and edges;
 - partitioners;
 - operator classes;
-- output types;
+- output types and key types, as `TypeInformation`, not only through their serializers, because two different `TypeInformation`s can create equal serializers;
 - parallelism and max parallelism;
 - UIDs and names.
 
@@ -511,7 +511,7 @@ The side-output case requests both side outputs on the Flink object, because no 
 
 Views never copy these fields, so the cases pass by construction. They stay as regression tests against adapter code that builds its own Flink objects.
 
-**No `@Internal` calls, and no unlisted `@Experimental` ones.** The generator checks the methods it forwards. For the Flink methods that hand-written view code calls, such as `map(fn, TypeInformation)`, `keyBy`, `process(fn)` and `returns`, a test lists them and fails if one is annotated `@Internal` on the adapter's line. It also fails if one is `@Experimental` and the [dependency policy](flink-compatibility.md#experimental) doesn't list the call as an exception. The test reads the annotations by reflection on 2.x and from bytecode on 1.20, where they have class retention.
+**No `@Internal` calls, and no unlisted `@Experimental` ones.** The generator checks the methods it forwards. For the Flink methods that hand-written adapter code calls, such as `map(fn, TypeInformation)`, `keyBy`, `process(fn)` and `returns`, a test lists them and fails if one is annotated `@Internal` on the adapter's line. It also fails if one is `@Experimental` and the [dependency policy](flink-compatibility.md#experimental) doesn't list the call as an exception, or if neither the method nor its class is `@Public` or `@PublicEvolving`. The test reads the calls from the adapter's class files, generated forwarders aside, so a call added later fails it until it's listed. It reads the annotations from Flink's class files on every line, which is the only place 1.20 has them, because they have class retention there.
 
 These tests run on every adapter lane, because the Flink classes differ between lines.
 

@@ -13,7 +13,7 @@ This page records how Flinkt is built and why: the module layout, the toolchain,
 | `flinkt-flink120` | `adapters/flinkt-flink120/` | yes | the Flink 1.20 adapter |
 | `test-support` | `test-support/` | no | the exact-type carrier and the compile-test harness |
 
-Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types and `@ExperimentalFlinkApi`, and `flinkt-view-codegen`'s [generator](architecture.md#generated-forwarders), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
+Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types, [views](architecture.md#views) and `@ExperimentalFlinkApi`, and `flinkt-view-codegen`'s [generator](architecture.md#generated-forwarders), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
 
 ### Adapters
 
@@ -63,7 +63,7 @@ Flink's own classes match: 1.20.5's are Java 8 class files (major version 52), a
 | `kotlin` | 2.4.21 | the build compiler: the newest stable Kotlin, and its key hashes were measured identical to 2.4.0's ([Kotlin compiler compatibility](kotlin-compatibility.md#key-identity-across-compiler-versions)) |
 | `kotlin-minimum` | 2.4.0 | the minimum supported compiler |
 | `ksp` | 2.3.13 | the newest KSP. It ran with Kotlin 2.4.0 through 2.4.21. The KSP Gradle plugin that runs `flinkt-view-codegen` has the same version |
-| `asm` | 9.11.1 | the newest ASM, which the extraction reads Flink's class files with. Build time only |
+| `asm` | 9.11.1 | the newest ASM, which the extraction reads Flink's class files with, and the adapters' structural tests read the views' and Flink's. Build time only |
 | `flink23` | 2.3.0 | the only 2.3 release |
 | `flink120` | 1.20.5 | the newest 1.20 patch |
 
