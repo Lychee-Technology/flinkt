@@ -14,6 +14,8 @@ kotlin = "2.4.21"
 kotlin-minimum = "2.4.0"
 # KSP, pinned once for the whole build. Tested with Kotlin 2.4.0 through 2.4.21.
 ksp = "2.3.13"
+# Reads Flink's class files for the parameter names of the view forwarders (flinkt-view-codegen). Build time only.
+asm = "9.11.1"
 # One Flink release per adapter line. The adapter compiles against it and tests run on it.
 flink23 = "2.3.0"
 flink120 = "1.20.5"
@@ -25,6 +27,8 @@ kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-em
 ksp-api = { module = "com.google.devtools.ksp:symbol-processing-api", version.ref = "ksp" }
 ksp-standalone = { module = "com.google.devtools.ksp:symbol-processing-aa-embeddable", version.ref = "ksp" }
 ksp-common-deps = { module = "com.google.devtools.ksp:symbol-processing-common-deps", version.ref = "ksp" }
+ksp-gradle-plugin = { module = "com.google.devtools.ksp:symbol-processing-gradle-plugin", version.ref = "ksp" }
+asm-tree = { module = "org.ow2.asm:asm-tree", version.ref = "asm" }
 flink-streaming-java = { module = "org.apache.flink:flink-streaming-java" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }

@@ -8,12 +8,12 @@ This page records how Flinkt is built and why: the module layout, the toolchain,
 |---|---|---|---|
 | `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`, the type model, the codec SPI, the schema model and the generated-type registry. Later the planner. Kotlin stdlib only |
 | `flinkt-ksp` | `flinkt-ksp/` | yes | the KSP processor (no code yet) |
-| `flinkt-view-codegen` | `flinkt-view-codegen/` | no | the forwarder generator for Flinkt's own build (no code yet) |
+| `flinkt-view-codegen` | `flinkt-view-codegen/` | no | `@FlinkView`, the KSP processor that generates the views' forwarders, and the extraction of Flink's parameter names, for Flinkt's own build |
 | `flinkt-flink23` | `adapters/flinkt-flink23/` | yes | the Flink 2.3 adapter, primary |
 | `flinkt-flink120` | `adapters/flinkt-flink120/` | yes | the Flink 1.20 adapter |
 | `test-support` | `test-support/` | no | the exact-type carrier and the compile-test harness |
 
-Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry) and the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types, the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
+Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types and `@ExperimentalFlinkApi`, and `flinkt-view-codegen`'s [generator](architecture.md#generated-forwarders), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
 
 ### Adapters
 
@@ -21,9 +21,19 @@ Every adapter compiles `adapters/shared/src/main/kotlin` together with its own `
 
 Flink is `compileOnly` in an adapter, because the job's environment supplies it ([Dependency packaging](flink-compatibility.md#dependency-packaging)). The same Flink release is on the adapter's test classpath and on its compile-test classpath, so tests run on the line the adapter was compiled for. `AdapterBuildTest` checks that on each lane.
 
-Adding an adapter, such as #27's `flinkt-flink22`, takes a version in `gradle/libs.versions.toml`, two lines in `settings.gradle.kts`, an `adapters/flinkt-flink22/build.gradle.kts` that applies `flinkt.flink-adapter` and names that version, the line's directory with its `ADAPTER_FLINK_LINE`, and an ABI dump from `updateKotlinAbi`. A CI lane for it is a separate decision ([PR CI](#pr-ci)). 2.2 and 2.3 differ in nothing the adapters use yet. If 2.x-only code appears, the per-line directories of 2.2 and 2.3 would duplicate it, and a shared 2.x directory may then be worth adding.
+Adding an adapter, such as #27's `flinkt-flink22`, takes a version in `gradle/libs.versions.toml`, two lines in `settings.gradle.kts`, an `adapters/flinkt-flink22/build.gradle.kts` that applies `flinkt.flink-adapter` and names that version, the line's directory with its `ADAPTER_FLINK_LINE`, a names file from `extractFlinkApi`, and an ABI dump from `updateKotlinAbi`. A CI lane for it is a separate decision ([PR CI](#pr-ci)). 2.2 and 2.3 differ in nothing the adapters use yet. If 2.x-only code appears, the per-line directories of 2.2 and 2.3 would duplicate it, and a shared 2.x directory may then be worth adding.
 
 The build logic is in `build-logic/`, as convention plugins: `flinkt.kotlin-jvm` for every module, `flinkt.published` for published modules, `flinkt.flink-adapter` for adapters and `flinkt.compile-tests` for the harness. `build-logic` is an included build, and a task named on the command line doesn't reach one, so the root project's `check` depends on `build-logic`'s. That way `./gradlew build` runs the build logic's own tests too.
+
+### View forwarders
+
+`flinkt.flink-adapter` runs `flinkt-view-codegen` through the KSP Gradle plugin, which generates the forwarders of each `@FlinkView` in the adapter ([Generated forwarders](architecture.md#generated-forwarders)). Two inputs come with it: the adapter's names file, `flink-api.tsv` next to its build script, and the version that dependency resolution selected for `flink-streaming-java` on the compile classpath, which the file must have been extracted from. The file is an input file of KSP's task, so editing it reruns generation.
+
+`extractFlinkApi` writes the names file from the Flink jars on the adapter's compile classpath, for the Flink classes the views hold, which `flinkt.flink-adapter` lists, and their supertypes. Changing an adapter's Flink version means running it and reviewing the diff, which shows each parameter name that changed. `checkFlinkApi`, part of `check`, fails when the checked-in file isn't what `extractFlinkApi` would write.
+
+`@FlinkView` has source retention, so `flinkt-view-codegen` is `compileOnly` in an adapter, and the dependency boundaries keep it off the runtime classpath. It's built for the toolchain JDK, which runs it. An adapter's compile classpath asks for Java 8 libraries, so the adapter asks for this one dependency at the toolchain's level: none of its classes reaches the adapter's bytecode.
+
+The generator's tests are adapter tests. They run the processor in the [compile-test harness](#compile-test-harness) with the adapter's names file and Flink line, so each PR lane runs them on its line.
 
 ## Toolchain
 
@@ -52,7 +62,8 @@ Flink's own classes match: 1.20.5's are Java 8 class files (major version 52), a
 | `jvm-target` | 1.8 | [Toolchain](#toolchain) |
 | `kotlin` | 2.4.21 | the build compiler: the newest stable Kotlin, and its key hashes were measured identical to 2.4.0's ([Kotlin compiler compatibility](kotlin-compatibility.md#key-identity-across-compiler-versions)) |
 | `kotlin-minimum` | 2.4.0 | the minimum supported compiler |
-| `ksp` | 2.3.13 | the newest KSP. It ran with Kotlin 2.4.0 through 2.4.21 |
+| `ksp` | 2.3.13 | the newest KSP. It ran with Kotlin 2.4.0 through 2.4.21. The KSP Gradle plugin that runs `flinkt-view-codegen` has the same version |
+| `asm` | 9.11.1 | the newest ASM, which the extraction reads Flink's class files with. Build time only |
 | `flink23` | 2.3.0 | the only 2.3 release |
 | `flink120` | 1.20.5 | the newest 1.20 patch |
 

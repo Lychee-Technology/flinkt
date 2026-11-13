@@ -1,3 +1,6 @@
+public abstract interface annotation class io/flinkt/flink/ExperimentalFlinkApi : java/lang/annotation/Annotation {
+}
+
 public final class io/flinkt/flink/TypeInfoKt {
 	public static final fun typeInfo (Lkotlin/reflect/KType;)Lorg/apache/flink/api/common/typeinfo/TypeInformation;
 }
