@@ -200,23 +200,27 @@ A consuming module reuses generated metadata from its dependencies and doesn't r
 
 Implemented in [#6](https://github.com/Lychee-Technology/flinkt/issues/6), in `flinkt-core`.
 
-A Kotlin type reaches a codec in two steps, and `TypeRegistry` keeps them apart:
+A Kotlin type reaches what serializes it in two steps, and `TypeRegistry` keeps them apart:
 
 ```text
 KType (typeOf<T>())
     │  model(type): structural analysis, for every type Kotlin can express
     ▼
 FlinktType               classifier, arguments with variance, nullability at every level, each node's shape
-    │  codec(type): supported resolution
+    │  resolve(type): supported resolution
     ▼
-GeneratedCodec<T>        or UnsupportedTypeException naming the canonical type and the reason
+Resolution               BuiltIn(kind): a built-in, which the adapter gives Flink's own TypeInformation (#7)
+                         Codec(GeneratedCodec): a type whose bytes Flinkt's generated code writes
+                         or UnsupportedTypeException naming the canonical type and the reason
 ```
 
 **The model represents; resolution supports.** Analysis models every planned shape from the start: built-ins, `List` and `Map` and the collection types Flinkt rejects, generated records, value classes, enums, sealed hierarchies, objects, type parameters, and any other class by its classifier only. A shape that a release doesn't support yet is still modeled and fails in resolution, so each later shape changes a resolution branch, not the model. Analysis reads only what `KType` carries without `kotlin-reflect`. A generated declaration's shape comes from the schema its module registered, because `typeOf<T>()` can't tell a sealed class or a value class apart without `kotlin-reflect`.
 
 **Canonical form.** A model's `toString()` is the Kotlin type with qualified names, every argument and every `?`, such as `kotlin.collections.Map<com.example.UserId, kotlin.collections.List<com.example.Event?>>`. Errors use it. `KType` has no type aliases or source spelling, so the form doesn't either. Equal `KType`s give equal models. A platform type from Java is modeled as non-null, and a Java collection, `(Mutable)List<T>!`, as the read-only `List<T>`. `MutableList<T>` and `List<T>` have the same classifier, so the analyzer tells them apart the only way `KType` allows, by equality: it rebuilds the mutable type from the classifier and arguments through `kotlin.jvm.internal.Reflection`, the factory compiled `typeOf` calls use, and compares. With `kotlin-reflect` present that factory builds `kotlin-reflect`'s types, so the comparison doesn't depend on which implementation the application has. #17 tests both configurations ([Collections](#collections)).
 
-**Codec SPI.** `GeneratedCodec<T>` reads and writes through `DataInput` and `DataOutput` and copies. A codec holds no state that changes between calls. A `CodecFactory` creates it when the type is resolved, and gets a `CodecContext` with the codecs of the type's arguments and a way to resolve the codecs of the types its values contain. The context is valid only while the factory runs, so a record's codec fixes its nested codecs at creation and never looks one up per value. Core holds no byte layout, and that includes the scalars: a built-in type resolves to the codec a module registers for it with `registerBuiltIn`, because how each scalar is written is #5's decision and the generated codecs have to agree with it. `registerBuiltIn` names the built-in by its Kotlin class, such as `Int::class`, with the factory's type, so a codec for another type doesn't compile and `codec<Int>()` can't return one. A type whose codec would need itself fails until recursive types are supported.
+**Codec SPI.** `GeneratedCodec<T>` reads and writes through `DataInput` and `DataOutput` and copies. A codec holds no state that changes between calls. A `CodecFactory` creates it when the type is resolved, and gets a `CodecContext` with the codecs of the type's arguments and a way to resolve the codecs of the types its values contain. The context is valid only while the factory runs, so a record's codec fixes its nested codecs at creation and never looks one up per value. A type whose codec would need itself fails until recursive types are supported.
+
+**Built-ins resolve to their kind.** Core holds no byte layout, and that includes the scalars. A built-in type resolves to its `BuiltInKind`, not to a codec, in every registry, whatever modules it has. The adapter gives Flink its own `TypeInformation` for the kind, so a top-level built-in's bytes are Flink's ([Deterministic bytes](#deterministic-bytes)), and a record's generated codec writes a built-in field itself, in #5's format. The SPI has no way for a module to register a built-in's codec, which would let any jar on the classpath define the bytes of `Int` or `String`, and a declaration registered for a built-in class fails the registry. A Flinkt codec for a built-in is needed only where one is composed, as a `List<String>` element (#17) or an `Envelope<String>` argument (#22), and it writes #5's scalar and string format. #5 decides where those codecs live, and #17 or #22, whichever lands first, adds them. Until then a codec that asks its context for a built-in's codec fails explicitly.
 
 **Registry.** `TypeRegistry.load(classLoader)` builds a registry from the `GeneratedTypeModule`s that `java.util.ServiceLoader` finds through the class loader the caller supplies. Flink loads each job's code in a class loader of its own and can run several jobs in one JVM, so:
 

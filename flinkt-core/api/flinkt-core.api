@@ -31,18 +31,35 @@ public abstract interface class io/flinkt/registry/GeneratedTypeModule {
 
 public abstract interface class io/flinkt/registry/MutableTypeRegistry {
 	public abstract fun register (Lkotlin/reflect/KClass;Lio/flinkt/schema/DeclarationSchema;Lio/flinkt/codec/CodecFactory;)V
-	public abstract fun registerBuiltIn (Lkotlin/reflect/KClass;Lio/flinkt/codec/CodecFactory;)V
+}
+
+public abstract class io/flinkt/registry/Resolution {
+	public abstract fun getType ()Lio/flinkt/types/FlinktType;
+}
+
+public final class io/flinkt/registry/Resolution$BuiltIn : io/flinkt/registry/Resolution {
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getKind ()Lio/flinkt/types/BuiltInKind;
+	public fun getType ()Lio/flinkt/types/FlinktType;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class io/flinkt/registry/Resolution$Codec : io/flinkt/registry/Resolution {
+	public final fun getCodec ()Lio/flinkt/codec/GeneratedCodec;
+	public fun getType ()Lio/flinkt/types/FlinktType;
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class io/flinkt/registry/TypeRegistry {
 	public static final field Companion Lio/flinkt/registry/TypeRegistry$Companion;
-	public final fun codec (Lio/flinkt/types/FlinktType;)Lio/flinkt/codec/GeneratedCodec;
-	public final fun codec (Lkotlin/reflect/KType;)Lio/flinkt/codec/GeneratedCodec;
 	public final fun declaration (Ljava/lang/Class;)Lio/flinkt/registry/GeneratedDeclaration;
 	public final fun declaration (Lkotlin/reflect/KClass;)Lio/flinkt/registry/GeneratedDeclaration;
 	public final fun getDeclarations ()Ljava/util/List;
 	public final fun getModules ()Ljava/util/List;
 	public final fun model (Lkotlin/reflect/KType;)Lio/flinkt/types/FlinktType;
+	public final fun resolve (Lio/flinkt/types/FlinktType;)Lio/flinkt/registry/Resolution;
+	public final fun resolve (Lkotlin/reflect/KType;)Lio/flinkt/registry/Resolution;
 }
 
 public final class io/flinkt/registry/TypeRegistry$Companion {

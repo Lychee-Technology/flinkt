@@ -1,13 +1,16 @@
 package io.flinkt
 
-import io.flinkt.example.StandInBuiltIns
 import io.flinkt.example.StandInTypes
 import io.flinkt.example.User
+import io.flinkt.example.UserCodec
+import io.flinkt.registry.Resolution
 import io.flinkt.registry.TypeRegistry
-import io.flinkt.registry.codec
+import io.flinkt.registry.resolve
 import java.lang.annotation.RetentionPolicy
 import kotlin.reflect.typeOf
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
@@ -19,7 +22,9 @@ class RuntimeClasspathTest {
         assertThrows<ClassNotFoundException> { Class.forName("kotlin.reflect.full.KClasses") }
         // Without kotlin-reflect, typeOf gives the standard library's own KType.
         assertEquals("kotlin.jvm.internal.TypeReference", typeOf<List<User?>>().javaClass.name)
-        TypeRegistry.of(StandInTypes(), StandInBuiltIns()).codec<User>()
+        val registry = TypeRegistry.of(StandInTypes())
+        assertSame(UserCodec, assertInstanceOf(Resolution.Codec::class.java, registry.resolve<User>()).codec)
+        assertInstanceOf(Resolution.BuiltIn::class.java, registry.resolve<String>())
     }
 
     @Test

@@ -2,19 +2,17 @@ package io.flinkt.registry
 
 import io.flinkt.codec.CodecContext
 import io.flinkt.codec.GeneratedCodec
+import io.flinkt.codec.codec
 import io.flinkt.example.Color
 import io.flinkt.example.Contact
 import io.flinkt.example.Envelope
 import io.flinkt.example.Event
-import io.flinkt.example.IntCodec
 import io.flinkt.example.Loop
 import io.flinkt.example.Order
 import io.flinkt.example.OrderCodec
 import io.flinkt.example.Plain
 import io.flinkt.example.Shutdown
-import io.flinkt.example.StandInBuiltIns
 import io.flinkt.example.StandInTypes
-import io.flinkt.example.StringCodec
 import io.flinkt.example.Unregistered
 import io.flinkt.example.User
 import io.flinkt.example.UserCodec
@@ -24,6 +22,7 @@ import io.flinkt.schema.FieldSchema
 import io.flinkt.schema.RecordSchema
 import io.flinkt.schema.SchemaType
 import io.flinkt.schema.ValueClassSchema
+import io.flinkt.types.BuiltInKind
 import io.flinkt.types.FlinktType
 import io.flinkt.types.TypeShape
 import io.flinkt.types.UnsupportedTypeException
@@ -43,24 +42,49 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
-/** Supported resolution: built-ins and non-generic generated records resolve, and every other shape fails explicitly. */
+/**
+ * Supported resolution: a built-in resolves to its kind and a non-generic generated record to its codec, and every
+ * other shape fails explicitly.
+ */
 class ResolutionTest {
-    private val registry = TypeRegistry.of(StandInTypes(), StandInBuiltIns())
+    private val registry = TypeRegistry.of(StandInTypes())
 
     private val user = User::class.java.name
 
     @Test
-    fun `a built-in resolves to the codec registered for it`() {
-        val codec = registry.codec<Int>()
+    fun `every built-in resolves to its kind, with no module registering anything for it`() {
+        val builtIns = mapOf(
+            typeOf<Boolean>() to BuiltInKind.BOOLEAN,
+            typeOf<Byte>() to BuiltInKind.BYTE,
+            typeOf<Short>() to BuiltInKind.SHORT,
+            typeOf<Int>() to BuiltInKind.INT,
+            typeOf<Long>() to BuiltInKind.LONG,
+            typeOf<Float>() to BuiltInKind.FLOAT,
+            typeOf<Double>() to BuiltInKind.DOUBLE,
+            typeOf<Char>() to BuiltInKind.CHAR,
+            typeOf<String>() to BuiltInKind.STRING,
+        )
+        assertEquals(BuiltInKind.entries.toSet(), builtIns.values.toSet(), "every built-in kind is resolved here")
+        // ServiceLoader finds no GeneratedTypeModule through the test's own class loader, so nothing is registered.
+        val loaded = TypeRegistry.load(javaClass.classLoader)
+        assertEquals(emptyList<GeneratedTypeModule>(), loaded.modules)
 
-        assertSame(IntCodec, codec)
-        assertEquals(42, roundTrip(codec, 42))
+        for ((type, kind) in builtIns) {
+            for (registry in listOf(loaded, registry)) {
+                val resolution = registry.resolve(type)
+                assertEquals(Resolution.BuiltIn(registry.model(type), kind), resolution)
+                assertEquals(kind.kotlinName, resolution.type.toString())
+            }
+        }
+        assertEquals(BuiltInKind.LONG, assertInstanceOf(Resolution.BuiltIn::class.java, loaded.resolve<Long>()).kind)
     }
 
     @Test
     fun `a generated record resolves to its codec`() {
-        val codec = registry.codec<User>()
+        val resolution = registry.resolve<User>()
+        val codec = registry.codecOf<User>()
 
+        assertEquals(registry.model<User>(), resolution.type)
         assertSame(UserCodec, codec)
         assertEquals(User(7, "Ada"), roundTrip(codec, User(7, "Ada")))
     }
@@ -68,7 +92,7 @@ class ResolutionTest {
     @Test
     fun `a record's codec takes its nested codecs once, when it's created`() {
         val before = UserCodecFactory.created.get()
-        val codec = registry.codec<Order>()
+        val codec = registry.codecOf<Order>()
         assertEquals(before + 1, UserCodecFactory.created.get())
 
         assertInstanceOf(OrderCodec::class.java, codec)
@@ -86,19 +110,41 @@ class ResolutionTest {
                         kept = context
                         PlainCodec
                     }
-                    registry.registerBuiltIn(Int::class) { IntCodec }
                 }
             },
         )
-        leaky.codec<Plain>()
+        leaky.resolve<Plain>()
 
-        val error = assertThrows<IllegalStateException> { kept!!.codec(typeOf<Int>()) }
+        // Plain itself resolves through this registry, so only the closed context fails.
+        val error = assertThrows<IllegalStateException> { kept!!.codec(typeOf<Plain>()) }
         assertContains(error.message, "used after its codec was created")
     }
 
     @Test
+    fun `a codec can't ask for a built-in's codec, because Flinkt has none`() {
+        val asking = TypeRegistry.of(
+            module {
+                it.register(Plain::class, plainSchema("id")) { context ->
+                    context.codec<Long>()
+                    error("unreachable: a built-in has no codec")
+                }
+            },
+        )
+
+        val error = assertThrows<UnsupportedTypeException> { asking.resolve<Plain>() }
+        assertEquals(Plain::class.java.name, error.canonicalType)
+        assertContains(
+            error.message,
+            "its codec asks for a codec of kotlin.Long, a built-in type, and Flinkt has no codec for a built-in type yet",
+        )
+    }
+
+    @Test
     fun `a platform type from Java resolves as the non-null type`() {
-        assertSame(StringCodec, registry.codec(kTypeOf(System.getProperty("java.version"))))
+        val resolution = registry.resolve(kTypeOf(System.getProperty("java.version")))
+
+        assertEquals(Resolution.BuiltIn(registry.model<String>(), BuiltInKind.STRING), resolution)
+        assertEquals("kotlin.String", resolution.type.toString())
     }
 
     @Test
@@ -128,7 +174,6 @@ class ResolutionTest {
         )
         assertUnsupported(typeOf<Set<Int>>(), "kotlin.collections.Set<kotlin.Int>: of the collection types")
         assertUnsupported(typeOf<IntArray>(), "kotlin.IntArray: of the collection types")
-        assertUnsupported(typeOf<Long>(), "kotlin.Long: no GeneratedTypeModule that this registry found registers a codec for it")
         assertUnsupported(typeOf<Any>(), "kotlin.Any: it isn't a built-in type, and it isn't annotated with @FlinkType")
         assertUnsupported(typeOf<Plain>(), "${Plain::class.java.name}: it isn't a built-in type, and it isn't annotated with @FlinkType")
         assertUnsupported(
@@ -160,29 +205,23 @@ class ResolutionTest {
     }
 
     @Test
-    fun `a built-in fails when no module registers its codec`() {
-        val error = assertThrows<UnsupportedTypeException> { TypeRegistry.of(StandInTypes()).codec<Int>() }
-        assertEquals("kotlin.Int", error.canonicalType)
-    }
-
-    @Test
     fun `a model from another registry resolves only if this registry has its declaration`() {
         val model = registry.model<User>()
 
-        assertSame(UserCodec, TypeRegistry.of(StandInTypes()).codec(model))
-        val error = assertThrows<UnsupportedTypeException> { TypeRegistry.of(StandInBuiltIns()).codec(model) }
+        assertSame(UserCodec, TypeRegistry.of(StandInTypes()).codecOf(model))
+        val error = assertThrows<UnsupportedTypeException> { TypeRegistry.of().resolve(model) }
         assertContains(error.message, "it's annotated with @FlinkType, but no GeneratedTypeModule that this registry found registers it")
         assertFalse("another class loader" in error.message!!, error.message)
     }
 
     @Test
     fun `a model built without a declaration resolves with this registry's declaration`() {
-        val bare = TypeRegistry.of(StandInBuiltIns())
+        val bare = TypeRegistry.of()
         val model = bare.model<User>()
         assertEquals(TypeShape.ClassifierOnly, model.shape)
 
-        assertSame(UserCodec, registry.codec(model))
-        assertInstanceOf(OrderCodec::class.java, registry.codec(bare.model<Order>()))
+        assertSame(UserCodec, registry.codecOf(model))
+        assertInstanceOf(OrderCodec::class.java, registry.codecOf(bare.model<Order>()))
     }
 
     @Test
@@ -196,10 +235,10 @@ class ResolutionTest {
             module { it.register(Plain::class, ValueClassSchema(Plain::class.java.name, FieldSchema("id", LONG))) { error("unsupported") } },
         )
 
-        assertSame(PlainCodec, record.codec(model))
+        assertSame(PlainCodec, record.codecOf(model))
         val plain = Plain::class.java.name
-        assertContains(assertThrows<UnsupportedTypeException> { generic.codec(model) }.message, "$plain: generic classes aren't supported yet")
-        assertContains(assertThrows<UnsupportedTypeException> { valueClass.codec(model) }.message, "$plain: value classes aren't supported yet")
+        assertContains(assertThrows<UnsupportedTypeException> { generic.resolve(model) }.message, "$plain: generic classes aren't supported yet")
+        assertContains(assertThrows<UnsupportedTypeException> { valueClass.resolve(model) }.message, "$plain: value classes aren't supported yet")
     }
 
     @Test
@@ -216,13 +255,13 @@ class ResolutionTest {
         )
         val sending = TypeRegistry.of(module { it.register(Plain::class, plainSchema("id")) { PlainCodec } })
 
-        assertSame(PlainCodec, receiving.codec(sending.model<Plain>()))
+        assertSame(PlainCodec, receiving.codecOf(sending.model<Plain>()))
         assertEquals(TypeShape.Generated(own), seen!!.shape)
     }
 
     @Test
     fun `a model is reconciled at every depth, and a model of this registry is kept as it is`() {
-        val bare = TypeRegistry.of(StandInBuiltIns())
+        val bare = TypeRegistry.of()
         val foreign = bare.model<Map<Long, Envelope<List<User?>>>>()
         val own = registry.model<Map<Long, Envelope<List<User?>>>>()
         assertNotEquals(own, foreign)
@@ -233,7 +272,7 @@ class ResolutionTest {
     }
 
     private fun assertUnsupported(type: KType, expected: String) {
-        val error = assertThrows<UnsupportedTypeException> { registry.codec(type) }
+        val error = assertThrows<UnsupportedTypeException> { registry.resolve(type) }
         assertContains(error.message, expected)
         assertEquals(registry.model(type).toString(), error.canonicalType)
     }
@@ -258,6 +297,18 @@ class ResolutionTest {
         override fun copy(value: Plain): Plain = value
     }
 }
+
+/** The codec that [type] resolves to, failing the test if it resolves to anything else. */
+internal fun TypeRegistry.codecOf(type: KType): GeneratedCodec<*> = resolve(type).expectCodec()
+
+/** The codec that [type] resolves to, failing the test if it resolves to anything else. */
+internal fun TypeRegistry.codecOf(type: FlinktType): GeneratedCodec<*> = resolve(type).expectCodec()
+
+/** The codec that [T] resolves to, failing the test if it resolves to anything else. */
+@Suppress("UNCHECKED_CAST")
+internal inline fun <reified T> TypeRegistry.codecOf(): GeneratedCodec<T> = codecOf(typeOf<T>()) as GeneratedCodec<T>
+
+private fun Resolution.expectCodec(): GeneratedCodec<*> = assertInstanceOf(Resolution.Codec::class.java, this).codec
 
 internal fun assertContains(actual: String?, expected: String) {
     assertTrue(actual != null && expected in actual, "Expected \"$expected\" in:\n$actual")

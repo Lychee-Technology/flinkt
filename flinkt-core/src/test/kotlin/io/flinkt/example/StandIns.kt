@@ -21,7 +21,8 @@ import java.io.DataOutput
 import java.util.concurrent.atomic.AtomicInteger
 
 // Hand-written stand-ins for what flinkt-ksp is to generate. Their bytes are a test's choice, not a format: the
-// record layout and the scalar encodings are #5's.
+// record layout and the scalar encodings are #5's. There's no stand-in for a built-in type: a built-in resolves to its
+// kind, and nothing registers a codec for one.
 
 @FlinkType
 data class User(val id: Long, val name: String)
@@ -101,22 +102,6 @@ class OrderCodec(private val user: GeneratedCodec<User>) : GeneratedCodec<Order>
     override fun copy(value: Order): Order = Order(value.id, user.copy(value.user))
 }
 
-object IntCodec : GeneratedCodec<Int> {
-    override fun serialize(value: Int, output: DataOutput): Unit = output.writeInt(value)
-
-    override fun deserialize(input: DataInput): Int = input.readInt()
-
-    override fun copy(value: Int): Int = value
-}
-
-object StringCodec : GeneratedCodec<String> {
-    override fun serialize(value: String, output: DataOutput): Unit = output.writeUTF(value)
-
-    override fun deserialize(input: DataInput): String = input.readUTF()
-
-    override fun copy(value: String): String = value
-}
-
 private val LONG = SchemaType.ClassType("kotlin.Long")
 private val STRING = SchemaType.ClassType("kotlin.String")
 private val USER = SchemaType.ClassType(User::class.java.name)
@@ -180,14 +165,6 @@ class StandInTypes : GeneratedTypeModule {
             Outer.Inner::class,
             RecordSchema(Outer.Inner::class.java.name, listOf(FieldSchema("id", LONG))),
         ) { error("not needed") }
-    }
-}
-
-/** Stand-in codecs for two built-in types. Flinkt's core registers none, because their bytes are #5's. */
-class StandInBuiltIns : GeneratedTypeModule {
-    override fun register(registry: MutableTypeRegistry) {
-        registry.registerBuiltIn(Int::class, CodecFactory { IntCodec })
-        registry.registerBuiltIn(String::class, CodecFactory { StringCodec })
     }
 }
 

@@ -52,8 +52,8 @@ class ClassLoaderIsolationTest {
         assertNull(second.registry.declaration(first.user))
 
         // Each resolves its own User to a codec from its own class loader, which writes and reads its own User.
-        val firstCodec = first.registry.codec(first.userType)
-        val secondCodec = second.registry.codec(second.userType)
+        val firstCodec = first.registry.codecOf(first.userType)
+        val secondCodec = second.registry.codecOf(second.userType)
         assertSame(first.loader, firstCodec.javaClass.classLoader)
         assertSame(second.loader, secondCodec.javaClass.classLoader)
         @Suppress("UNCHECKED_CAST")
@@ -63,14 +63,14 @@ class ClassLoaderIsolationTest {
         // The other job's User is the same name and a different type: modeled by its classifier only, and not
         // resolved, with a message that says why.
         assertEquals(TypeShape.ClassifierOnly, first.registry.model(second.userType).shape)
-        val error = assertThrows<UnsupportedTypeException> { first.registry.codec(second.userType) }
+        val error = assertThrows<UnsupportedTypeException> { first.registry.resolve(second.userType) }
         assertEquals("com.example.User", error.canonicalType)
         assertContains(error.message, "this registry has a class of that name from another class loader")
 
         // The other registry's model of its User carries that registry's schema, and still isn't this registry's.
         val foreign = second.registry.model(second.userType)
         assertEquals(TypeShape.Generated(second.registry.declarations.single().schema), foreign.shape)
-        val transferred = assertThrows<UnsupportedTypeException> { first.registry.codec(foreign) }
+        val transferred = assertThrows<UnsupportedTypeException> { first.registry.resolve(foreign) }
         assertContains(transferred.message, "this registry has a class of that name from another class loader")
     }
 

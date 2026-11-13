@@ -69,4 +69,25 @@ class PublishedClassesTest {
             )
             .assertSuccess()
     }
+
+    @ParameterizedTest
+    @EnumSource(KotlinCompiler::class)
+    fun `code like an adapter's handles every resolution without a fallback branch`(compiler: KotlinCompiler) {
+        // The when is an expression, so it compiles only if BuiltIn and Codec are every resolution there is.
+        KotlinCompilation(compiler)
+            .compile(
+                """
+                import io.flinkt.registry.Resolution
+                import io.flinkt.registry.TypeRegistry
+                import io.flinkt.registry.resolve
+
+                inline fun <reified T> serializerOf(registry: TypeRegistry): String =
+                    when (val resolution = registry.resolve<T>()) {
+                        is Resolution.BuiltIn -> "Flink's own serializer for " + resolution.kind.jvmClass.name
+                        is Resolution.Codec -> "an adapter serializer over " + resolution.codec
+                    }
+                """,
+            )
+            .assertSuccess()
+    }
 }

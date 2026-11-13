@@ -1,9 +1,6 @@
 package io.flinkt.registry
 
-import io.flinkt.example.IntCodec
-import io.flinkt.example.StandInBuiltIns
 import io.flinkt.example.StandInTypes
-import io.flinkt.example.StringCodec
 import io.flinkt.example.User
 import io.flinkt.example.UserCodec
 import io.flinkt.example.UserCodecFactory
@@ -13,7 +10,7 @@ import io.flinkt.schema.RecordSchema
 import io.flinkt.schema.SchemaType
 import io.flinkt.testing.compile.KotlinCompilation
 import io.flinkt.testing.compile.KotlinCompiler
-import io.flinkt.types.UnsupportedTypeException
+import io.flinkt.types.BuiltInKind
 import java.net.URLClassLoader
 import java.nio.file.Files
 import java.nio.file.Path
@@ -33,13 +30,14 @@ class TypeRegistryTest {
 
     @Test
     fun `modules listed in META-INF services are discovered through the supplied class loader`() {
-        val loader = withServices(StandInTypes::class.java.name, StandInBuiltIns::class.java.name)
+        val loader = withServices(StandInTypes::class.java.name)
 
         val registry = TypeRegistry.load(loader)
 
-        assertEquals(listOf(StandInTypes::class.java, StandInBuiltIns::class.java), registry.modules.map { it.javaClass })
-        assertSame(UserCodec, registry.codec<User>())
-        assertSame(IntCodec, registry.codec<Int>())
+        assertEquals(listOf(StandInTypes::class.java), registry.modules.map { it.javaClass })
+        assertSame(UserCodec, registry.codecOf<User>())
+        // The stand-in module registers generated records only, and a built-in resolves to its kind all the same.
+        assertEquals(BuiltInKind.INT, assertInstanceOf(Resolution.BuiltIn::class.java, registry.resolve<Int>()).kind)
         // The test's own class loader lists no module, so its registry has no types.
         assertEquals(emptyList<GeneratedTypeModule>(), TypeRegistry.load(javaClass.classLoader).modules)
         assertNull(TypeRegistry.load(javaClass.classLoader).declaration(User::class))
@@ -76,7 +74,7 @@ class TypeRegistryTest {
     }
 
     @Test
-    fun `a type registered twice by one module, and a built-in registered twice, fail`() {
+    fun `a type registered twice by one module fails`() {
         val twice = object : GeneratedTypeModule {
             override fun register(registry: MutableTypeRegistry) {
                 repeat(2) { registry.register(User::class, userSchema, UserCodecFactory) }
@@ -85,10 +83,6 @@ class TypeRegistryTest {
         assertContains(
             assertThrows<IllegalStateException> { TypeRegistry.of(twice) }.message,
             "${User::class.java.name} is registered twice by ",
-        )
-        assertContains(
-            assertThrows<IllegalStateException> { TypeRegistry.of(StandInBuiltIns(), StandInBuiltIns()) }.message,
-            "the built-in type kotlin.Int is registered twice: by ${StandInBuiltIns::class.java.name}",
         )
     }
 
@@ -106,56 +100,41 @@ class TypeRegistryTest {
 
     @Test
     fun `a built-in type can't be registered as a generated declaration`() {
-        val error = assertThrows<IllegalStateException> {
-            TypeRegistry.of(
-                module { registry ->
-                    registry.register(String::class, RecordSchema("java.lang.String", emptyList())) { error("unused") }
-                },
-            )
+        fun assertRejected(name: String, register: (MutableTypeRegistry) -> Unit) {
+            val error = assertThrows<IllegalStateException> { TypeRegistry.of(module(register)) }
+            assertContains(error.message, "registers the built-in type $name as a generated declaration")
+            assertContains(error.message, "A built-in type resolves to its built-in kind, and no module defines its codec")
         }
-        assertContains(error.message, "registers the built-in type java.lang.String as a generated declaration")
+
+        assertRejected("java.lang.String") { it.register(String::class, RecordSchema("java.lang.String", emptyList())) { error("unused") } }
+        assertRejected("int") { it.register(Int::class, RecordSchema("int", emptyList())) { error("unused") } }
+        assertRejected("long") { it.register(Long::class, RecordSchema("long", emptyList())) { error("unused") } }
     }
 
     @Test
-    fun `a built-in codec is registered for its Kotlin class and resolves only for that type`() {
-        val strings = TypeRegistry.of(module { registry -> registry.registerBuiltIn(String::class) { StringCodec } })
-
-        assertSame(StringCodec, strings.codec<String>())
-        assertSame(IntCodec, TypeRegistry.of(module { it.registerBuiltIn(Int::class) { IntCodec } }).codec<Int>())
-        val error = assertThrows<UnsupportedTypeException> { strings.codec<Int>() }
-        assertEquals("kotlin.Int", error.canonicalType)
-    }
-
-    @Test
-    fun `a class that isn't a built-in type can't be registered as one`() {
-        val error = assertThrows<IllegalStateException> {
-            TypeRegistry.of(module { registry -> registry.registerBuiltIn(User::class, UserCodecFactory) })
-        }
-        assertContains(error.message, "registers a built-in codec for ${User::class.java.name}, which isn't a built-in type")
-        assertContains(error.message, "kotlin.Int, kotlin.Long")
+    fun `a module registers generated declarations only`() {
+        // A built-in's bytes are Flink's, so no jar on the classpath can define them through the SPI.
+        assertEquals(listOf("register"), MutableTypeRegistry::class.java.methods.map { it.name })
     }
 
     @ParameterizedTest
     @EnumSource(KotlinCompiler::class)
-    fun `a built-in codec for another type doesn't compile`(compiler: KotlinCompiler) {
-        fun registering(call: String) = """
-            import io.flinkt.codec.CodecFactory
-            import io.flinkt.codec.GeneratedCodec
-            import io.flinkt.registry.GeneratedTypeModule
-            import io.flinkt.registry.MutableTypeRegistry
+    fun `registering a built-in codec doesn't compile`(compiler: KotlinCompiler) {
+        KotlinCompilation(compiler)
+            .compile(
+                """
+                import io.flinkt.codec.CodecFactory
+                import io.flinkt.registry.GeneratedTypeModule
+                import io.flinkt.registry.MutableTypeRegistry
 
-            class BuiltIns(private val strings: CodecFactory<String>, private val string: GeneratedCodec<String>) : GeneratedTypeModule {
-                override fun register(registry: MutableTypeRegistry) {
-                    $call
+                class BuiltIns(private val ints: CodecFactory<Int>) : GeneratedTypeModule {
+                    override fun register(registry: MutableTypeRegistry) {
+                        registry.registerBuiltIn(Int::class, ints)
+                    }
                 }
-            }
-            """
-
-        KotlinCompilation(compiler).compile(registering("registry.registerBuiltIn(String::class, strings)")).assertSuccess()
-        KotlinCompilation(compiler).compile(registering("registry.registerBuiltIn(Int::class, strings)"))
-            .assertFailure("ARGUMENT_TYPE_MISMATCH", "'CodecFactory<String>', but 'CodecFactory<Int>' was expected")
-        KotlinCompilation(compiler).compile(registering("registry.registerBuiltIn(Int::class) { string }"))
-            .assertFailure("RETURN_TYPE_MISMATCH", "expected 'GeneratedCodec<Int>', actual 'GeneratedCodec<String>'")
+                """,
+            )
+            .assertFailure("UNRESOLVED_REFERENCE", "registerBuiltIn")
     }
 
     @Test
@@ -163,7 +142,7 @@ class TypeRegistryTest {
         lateinit var kept: MutableTypeRegistry
         TypeRegistry.of(module { kept = it })
 
-        val error = assertThrows<IllegalStateException> { kept.registerBuiltIn(Int::class) { IntCodec } }
+        val error = assertThrows<IllegalStateException> { kept.register(User::class, userSchema, UserCodecFactory) }
         assertContains(error.message, "registered a type after its register() returned")
     }
 

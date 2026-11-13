@@ -2,7 +2,6 @@ package io.flinkt.registry
 
 import io.flinkt.FlinkType
 import io.flinkt.codec.CodecFactory
-import io.flinkt.codec.GeneratedCodec
 import io.flinkt.schema.DeclarationSchema
 import io.flinkt.types.BuiltInKind
 import io.flinkt.types.FlinktType
@@ -15,11 +14,11 @@ import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 
 /**
- * The generated types visible from one class loader, and the two steps from a Kotlin type to its codec:
+ * The generated types visible from one class loader, and the two steps from a Kotlin type to what serializes it:
  *
  * - [model] analyzes a `KType` into Flinkt's type model, for every type Kotlin can express;
- * - [codec] resolves a model to a codec for the shapes this release supports, and fails with
- *   `UnsupportedTypeException` for every other.
+ * - [resolve] resolves a model for the shapes this release supports, a built-in to its kind and a generated record to
+ *   its codec, and fails with `UnsupportedTypeException` for every other.
  *
  * A registry belongs to the class loader it was [loaded][load] from. Flink loads each job's code in a class loader of
  * its own and can run several jobs in one JVM, so generated types are identified by their `Class` objects, never by
@@ -33,7 +32,6 @@ public class TypeRegistry private constructor(
     /** The modules the registry was built from, in the order they registered. */
     public val modules: List<GeneratedTypeModule>,
     private val generated: Map<Class<*>, GeneratedDeclaration<*>>,
-    private val builtIns: Map<BuiltInKind, BuiltInRegistration>,
 ) {
     private val analyzer = TypeAnalyzer { type -> generated[type]?.let { TypeShape.Generated(it.schema) } }
 
@@ -56,28 +54,33 @@ public class TypeRegistry private constructor(
     public fun model(type: KType): FlinktType = analyzer.analyze(type)
 
     /**
-     * Supported resolution: the codec of [type].
+     * Supported resolution of [type].
      *
-     * This release resolves the built-in types whose codecs a module registers, and non-null, non-generic generated
-     * records whose fields it can resolve. Every other type is modeled but fails with `UnsupportedTypeException`,
-     * whose message names the canonical type and the reason.
+     * This release resolves two kinds of type:
+     *
+     * - a non-null built-in type resolves to its kind, [Resolution.BuiltIn], whichever modules the registry has. Its
+     *   bytes are Flink's, because the adapter maps the kind to Flink's own `TypeInformation`, and no module can
+     *   register a codec for it;
+     * - a non-null, non-generic generated record whose fields it can resolve resolves to the codec its module's factory
+     *   creates, [Resolution.Codec].
+     *
+     * Every other type is modeled but fails with `UnsupportedTypeException`, whose message names the canonical type
+     * and the reason.
      *
      * [type] may come from another registry. It's resolved as this registry models the same classes, arguments and
      * nullability: each generated declaration, at every depth, is this registry's own declaration of that class,
      * schema and factory alike, and a class this registry has no declaration for is known by its classifier only.
      * The shape another registry gave a class doesn't decide anything here.
      */
-    public fun codec(type: FlinktType): GeneratedCodec<*> = Resolution(this).resolve(reconcile(type))
+    public fun resolve(type: FlinktType): Resolution = Resolver(this).resolve(reconcile(type))
 
-    /** Supported resolution of a `KType`: [codec] of its [model]. */
-    public fun codec(type: KType): GeneratedCodec<*> = Resolution(this).resolve(model(type))
+    /** Supported resolution of a `KType`: [resolve] of its [model]. */
+    public fun resolve(type: KType): Resolution = Resolver(this).resolve(model(type))
 
     /** [type], which any registry may have built, as this registry models it. */
     internal fun reconcile(type: FlinktType): FlinktType = analyzer.reconcile(type)
 
-    internal fun builtIn(kind: BuiltInKind): BuiltInRegistration? = builtIns[kind]
-
-    /** Why [type], a class without a codec in this registry, isn't resolved. */
+    /** Why [type], a class without a declaration in this registry, isn't resolved. */
     internal fun unmodeledReason(type: FlinktType): String {
         val jvmClass = checkNotNull(type.jvmClass)
         val sameName = generated.keys.firstOrNull { it.name == jvmClass.name && it != jvmClass }
@@ -113,7 +116,7 @@ public class TypeRegistry private constructor(
             val builder = Builder()
             val list = modules.toList()
             list.forEach(builder::add)
-            return TypeRegistry(Collections.unmodifiableList(list), builder.generated, builder.builtIns)
+            return TypeRegistry(Collections.unmodifiableList(list), builder.generated)
         }
 
         /** Builds a registry from [modules] found some other way, such as in a test. */
@@ -122,7 +125,6 @@ public class TypeRegistry private constructor(
 
     private class Builder {
         val generated = LinkedHashMap<Class<*>, GeneratedDeclaration<*>>()
-        val builtIns = LinkedHashMap<BuiltInKind, BuiltInRegistration>()
 
         fun add(module: GeneratedTypeModule) {
             val scope = Scope(module)
@@ -151,26 +153,13 @@ public class TypeRegistry private constructor(
                 if (jvmClass.isPrimitive || BuiltInKind.entries.any { it.jvmClass == jvmClass }) {
                     throw RegistrationException(
                         "${describe(module)} registers the built-in type ${jvmClass.name} as a generated declaration. " +
-                            "A built-in type's codec is registered with registerBuiltIn",
+                            "A built-in type resolves to its built-in kind, and no module defines its codec",
                     )
                 }
                 generated[jvmClass]?.let { existing ->
                     throw RegistrationException(twice(jvmClass.name, existing.module, module))
                 }
                 generated[jvmClass] = GeneratedDeclaration(type, schema, codecFactory, module)
-            }
-
-            override fun <T : Any> registerBuiltIn(type: KClass<T>, codecFactory: CodecFactory<T>) {
-                checkOpen()
-                val kind = BuiltInKind.entries.firstOrNull { it.jvmClass == type.javaObjectType }
-                    ?: throw RegistrationException(
-                        "${describe(module)} registers a built-in codec for ${type.javaObjectType.name}, which isn't a " +
-                            "built-in type. The built-in types are ${BuiltInKind.entries.joinToString { it.kotlinName }}",
-                    )
-                builtIns[kind]?.let { existing ->
-                    throw RegistrationException(twice("the built-in type ${kind.kotlinName}", existing.module, module))
-                }
-                builtIns[kind] = BuiltInRegistration(codecFactory, module)
             }
 
             private fun checkOpen() {
@@ -188,9 +177,8 @@ public class TypeRegistry private constructor(
 /** Analyzes [T] with [TypeRegistry.model]. */
 public inline fun <reified T> TypeRegistry.model(): FlinktType = model(typeOf<T>())
 
-/** Resolves [T] with [TypeRegistry.codec]. */
-@Suppress("UNCHECKED_CAST")
-public inline fun <reified T> TypeRegistry.codec(): GeneratedCodec<T> = codec(typeOf<T>()) as GeneratedCodec<T>
+/** Resolves [T] with [TypeRegistry.resolve]. */
+public inline fun <reified T> TypeRegistry.resolve(): Resolution = resolve(typeOf<T>())
 
 /**
  * A generated declaration as a [GeneratedTypeModule] registered it: its class, its schema, and its codec factory.
@@ -205,8 +193,6 @@ public class GeneratedDeclaration<T : Any> internal constructor(
 ) {
     override fun toString(): String = "${type.java.name}, registered by ${describe(module)}"
 }
-
-internal class BuiltInRegistration(val codecFactory: CodecFactory<*>, val module: GeneratedTypeModule)
 
 /** A registration error. It already names the module, so registering doesn't wrap it. */
 private class RegistrationException(message: String) : IllegalStateException(message)
