@@ -244,7 +244,8 @@ Most view methods only forward, and they are [generated](architecture.md#generat
   - a method missing on the line;
   - a type-introducing method (`map`, `connect`);
   - a method returning a type that has no view (`broadcast` with descriptors);
-  - an `@Internal` method (`getTransformation`).
+  - an `@Internal` method (`getTransformation`);
+  - a method that reads the type of the stream the view holds (`getType`).
 
   These tests run on every adapter lane, because each line's classes differ. On 1.20 they also show that the `@Internal` check sees class-retention annotations.
 - **Flink's stability status reaches Kotlin callers.** A Kotlin call to the forwarder of a deprecated Flink method must compile with a deprecation warning, as a Java call to Flink's method does. A call to the forwarder of an `@Experimental` method must warn without `@OptIn(ExperimentalFlinkApi::class)` and compile cleanly with it. An overload that only uses a deprecated type must be forwarded without an annotation.

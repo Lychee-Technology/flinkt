@@ -16,7 +16,13 @@ class AdapterBuildTest {
 
     @Test
     fun `shared and per-line classes target Java 8 and carry Kotlin metadata 2_4_0`() {
-        for (name in listOf("io.flinkt.flink.AdapterLineKt", "io.flinkt.flink.FlinkLineKt", "io.flinkt.flink.TypeInfoKt")) {
+        val classes = listOf(
+            "io.flinkt.flink.AdapterLineKt",
+            "io.flinkt.flink.FlinkLineKt",
+            "io.flinkt.flink.TypeInfoKt",
+            "io.flinkt.flink.ExperimentalFlinkApi",
+        )
+        for (name in classes) {
             val type = Class.forName(name)
             assertEquals(52, ClassFiles.majorVersion(type), name)
             assertEquals("2.4.0", ClassFiles.kotlinMetadataVersion(type), name)

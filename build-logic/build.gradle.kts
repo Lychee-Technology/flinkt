@@ -4,6 +4,8 @@ plugins {
 
 dependencies {
     implementation(libs.kotlin.gradle.plugin)
+    // Adapters run flinkt-view-codegen through it.
+    implementation(libs.ksp.gradle.plugin)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
