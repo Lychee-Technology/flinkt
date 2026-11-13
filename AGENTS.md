@@ -2,7 +2,7 @@
 
 ## Project state
 
-**Flinkt** is in the design stage. It has a build and `flinkt-core`'s type model, codec SPI and generated-type registry, but no Flink integration yet. The repository contains:
+**Flinkt** is in the design stage. It has a build, `flinkt-core`'s type model, codec SPI and generated-type registry, and the adapters' `typeInfo<T>()` for Flink's built-in types, but no views, state helpers or Flinkt serializers yet. The repository contains:
 
 - the user-facing design (`README.md`);
 - the architecture decisions and their reasons (`docs/architecture.md`);
@@ -13,7 +13,7 @@
 - the build: modules, toolchain, pinned versions, build checks and CI lanes (`docs/build.md`);
 - contributor rules (`docs/non-code-rules.md`).
 
-The Gradle build has the planned modules, `flinkt-core`, `flinkt-ksp`, `flinkt-view-codegen`, `flinkt-flink23` and `flinkt-flink120`, plus the internal `test-support`. Apart from `flinkt-core`, their production code is only what the build checks need. There's no linter or formatter.
+The Gradle build has the planned modules, `flinkt-core`, `flinkt-ksp`, `flinkt-view-codegen`, `flinkt-flink23` and `flinkt-flink120`, plus the internal `test-support`. Apart from `flinkt-core` and the adapters' `typeInfo<T>()`, their production code is only what the build checks need. There's no linter or formatter.
 
 Read `README.md` and `docs/architecture.md` before you propose or write code. Read `docs/schema-evolution.md` before you touch a persisted format, a serializer snapshot or restore. Read `docs/flink-compatibility.md` before you change Flink-facing code or the support matrix. Read `docs/kotlin-compatibility.md` before you change the Kotlin or KSP version, the language or API version, or the key-hash checks. Read `docs/testing.md` before you add tests or CI. It defines the evidence that each compatibility claim needs. Read `docs/build.md` before you change the build, a pinned version, the module layout or the CI lanes.
 
@@ -51,6 +51,8 @@ Flinkt is a Kotlin-first layer over Apache Flink APIs. It has three layers: a KS
 **State helpers.** `valueStateDescriptor<T>()`, `listStateDescriptor<T>()`, and `mapStateDescriptor<K, V>()` return Flink descriptors. `runtimeContext.valueState<T>()`, `listState<T>()`, and `mapState<K, V>()` bind state in `open()` and return Flink's `ValueState`, `ListState`, and `MapState`. See [README, State](README.md#state).
 
 **Type model and registry.** `TypeRegistry.load(classLoader)` builds a registry from the `GeneratedTypeModule`s that `ServiceLoader` finds through that class loader. `model(kType)` analyzes any `KType` into a `FlinktType` that keeps every argument and `?`, and `resolve(model)` resolves the shapes a release supports, with its own registry's declarations whichever registry built the model, and throws `UnsupportedTypeException`, naming the canonical type, for the rest. A built-in resolves to its `BuiltInKind`, which the adapter maps to Flink's own `TypeInformation`, and a generated record to its codec. Generated types are identified by their `Class`, never by name, and nothing is cached in a static field. A platform type is modeled as non-null. Core writes no bytes, scalars included, and no module can register a codec for a built-in. See [architecture.md](docs/architecture.md#type-model-and-registry).
+
+**Type information.** `typeInfo<T>()` resolves `typeOf<T>()` with a registry loaded, on each call, from the thread's context class loader. A non-null built-in gives Flink's own `BasicTypeInfo` for its boxed JVM class, so its serializer and bytes are Flink's. Every other type, generated types included until #12, throws `UnsupportedTypeException` naming the full Kotlin type and the fixes, and never falls back to `TypeExtractor` or `GenericTypeInfo`. Each further built-in mapping, such as `BigDecimal` or `Instant`, fixes a state format, so it's its own change with its reason. See [architecture.md](docs/architecture.md#type-information).
 
 **Generated code** implements the Flink-free codec SPI and never subclasses a Flink class. KSP also generates each record type's persisted schema and a migration constructor. Each adapter owns the `TypeInformation`, `TypeSerializer`, and snapshot classes shared by all generated types, and the snapshot class has the same name on every adapter. See [architecture.md](docs/architecture.md#generated-code-and-the-adapter).
 
