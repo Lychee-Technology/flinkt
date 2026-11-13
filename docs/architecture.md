@@ -85,11 +85,13 @@ Flink serializer             created by Flink from the TypeInformation and its S
 
 ## Views
 
+The hand-written part, entering with `.flinkt()`, `asFlink()` and the type-introducing `map`, `keyBy` and keyed `process`, is implemented in [#9](https://github.com/Lychee-Technology/flinkt/issues/9). The forwarded methods are [#10](https://github.com/Lychee-Technology/flinkt/issues/10)'s, so each view lists none yet.
+
 These rules keep the [user-facing promises](../README.md#flinkt-streams) true:
 
 1. **A view never constructs a Flink stream object.** It holds the object it was given or the one a Flink call returned. Nothing else in Flinkt holds Flink's per-object state, so there's nothing to copy or keep in sync. Wrapping an object reads nothing from it, not even its type, whether the object entered with `.flinkt()` or a Flink call returned it. `Transformation.getOutputType()` marks the type as used, and a later `returns()` on the Flink object would then throw.
-2. **A view method makes one call to the Flink method of the same name on the held object, and wraps the object that call returns.** Flink's validation, partitioning and operator selection apply unchanged. A fluent method wraps what Flink returned instead of assuming Flink returned `this`.
-3. **A method that introduces an element type is `inline` with a reified type parameter, and it takes Flink's own function type.** A Kotlin lambda converts to that type, and a function object passes through unchanged, so both get their result type from the static type at the call site. Each such method has a non-inline overload that takes the `TypeInformation` explicitly, for generic code where the type isn't known.
+2. **A view method makes one call to the Flink method of the same name on the held object, and wraps the object that call returns.** Flink's validation, partitioning and operator selection apply unchanged. A fluent method wraps what Flink returned instead of assuming Flink returned `this`. The one second call is rule 4's `returns()`, which completes the one Flink operation the view method stands for. No other extra call is allowed.
+3. **A method that introduces an element type is `inline` with a reified type parameter, and it takes Flink's own function type.** A Kotlin lambda converts to that type, and a function object passes through unchanged, so both get their result type from the static type at the call site. Each such method has a non-inline overload that takes the `TypeInformation` explicitly, for generic code where the type isn't known. The inline overload calls that one with `typeInfo<R>()`, so the inline body, which a user's compiler copies into the user's class files, makes no Flink call of its own, and the object a view holds stays private. Both overloads take Flink's parameter names, as forwarders do: `mapper`, `key` and `keyType`, `keyedProcessFunction`, and `outputType`.
 4. **Hand-written adapter code calls only `@Public` and `@PublicEvolving` Flink methods**, apart from `@Experimental` exceptions that the [dependency policy](flink-compatibility.md#dependency-policy-for-flink-apis) lists. Where Flink's explicit-type overload is `@Internal`, as `process(fn, TypeInformation)` is on every target line, the view calls the one-argument method and then `returns(TypeInformation)`. Flink's `process(fn)` runs its `TypeExtractor` with missing types allowed, and `returns()` replaces the result before anything reads it. Generated forwarders carry the status Flink declares instead: they refuse `@Internal` and put `@Experimental` behind an opt-in ([Generated forwarders](#generated-forwarders)).
 
 A view offers two kinds of Flink methods:
@@ -108,12 +110,16 @@ Each view names the Flink class it holds and the Flink methods it forwards:
     DataStream::class,
     forward = ["filter", "union", "rebalance", "sinkTo", "print", "executeAndCollect", ...],
 )
-public open class FlinktDataStream<T> @PublishedApi internal constructor(
-    @PublishedApi internal open val flink: DataStream<T>,
+public open class FlinktDataStream<T> internal constructor(
+    private val stream: DataStream<T>,
 ) : FlinktDataStreamForwarders<T> {
-    override fun asFlink(): DataStream<T> = flink
+    override fun asFlink(): DataStream<T> = stream
 
-    public inline fun <reified R> map(fn: MapFunction<T, R>): FlinktSingleOutputStreamOperator<R> = ...
+    public inline fun <reified R> map(mapper: MapFunction<T, R>): FlinktSingleOutputStreamOperator<R> =
+        map(mapper, typeInfo<R>())
+
+    public fun <R> map(mapper: MapFunction<T, R>, outputType: TypeInformation<R>): FlinktSingleOutputStreamOperator<R> =
+        FlinktSingleOutputStreamOperator(stream.map(mapper, outputType))
 }
 ```
 
@@ -457,6 +463,8 @@ The partition-key and `MapState` rules need equal keys to have equal bytes and u
 Maps aren't deterministic ([Collections](#collections)), and no collection is a key.
 
 ### Where the rules apply
+
+Until #32 implements these rules, the view's `keyBy` applies an interim policy ([#9](https://github.com/Lychee-Technology/flinkt/issues/9)) that is narrower than both bullets below. Flink's `keyBy` doesn't read `isKeyType()`, and `KeyedStream.validateKeyType` rejects only POJOs without `hashCode()`, arrays and `EnumTypeInfo` (checked in the 1.20.5 and 2.3.0 sources), so Flink would accept any `TypeInformation` that Flinkt later builds, including one for a key whose `hashCode()` differs between JVMs. The interim `keyBy` therefore accepts only the non-null `Boolean`, `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Char` and `String`, and refuses every other key type before it calls Flink, naming it. The reified overload checks `K`'s `KType` before it looks up `typeInfo<K>()`, so a type that `typeInfo` resolves in a later release is still refused. The overload that takes a `TypeInformation` accepts only Flink's `BasicTypeInfo` constants for those types, which `typeInfo` gives for them, and names any other by its `toString()`. The set is listed, so a built-in mapping that `typeInfo` adds later doesn't join it by itself. Flink's own rules stay reachable through `asFlink().keyBy(…)`.
 
 - **The view's `keyBy` with a reified key type** applies the partition-key rules to the key's full Kotlin type when the job graph is built, before it calls Flink. The `TypeInformation` it passes is in the partition-key role, which the snapshot records, so a later constructor reorder of the key fails the restore ([Schema evolution](schema-evolution.md#keys)).
 - **The view's `keyBy` with an explicit `TypeInformation`** applies them, and passes Flink the same type in the partition-key role, if the `TypeInformation` is one of Flinkt's own classes, which carry the canonical Kotlin type. Any other `TypeInformation`, whether it comes from Flink, a library or the caller, is an intentional escape hatch. Flinkt checks nothing, Flink's `keyBy` and its own validation apply, and the caller gets Flink's guarantees instead of Flinkt's key-safety guarantee. It's the same exit as passing a `TypeInformation` for a type Flinkt doesn't model, or calling `asFlink().keyBy(…)`. `typeInfo<Long>()` returns Flink's `BasicTypeInfo` (#7), so it counts as foreign, and Flink accepts every built-in that Flinkt would. Policing a foreign `TypeInformation` would add little safety, because the caller can always use raw Flink.

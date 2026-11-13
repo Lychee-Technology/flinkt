@@ -143,7 +143,7 @@ An earlier version of this design made each Flinkt stream a subclass of the Flin
 
 ### Flink's names, Flink's behavior
 
-Each view method makes one call to the Flink method of the same name on the object it holds, and wraps the object Flink returns. Flink's own checks apply. After `op.forceNonParallel()`, `op.flinkt().setParallelism(2)` fails exactly as `op.setParallelism(2)` does.
+Each view method makes one call to the Flink method of the same name on the object it holds, and wraps the object Flink returns. Keyed `process` is the one method that makes a second call. Flink's `process(fn, TypeInformation)` is `@Internal`, so the view calls Flink's public `process(fn)` and then `returns(TypeInformation)` on the operator it returned, before anything reads its type. Flink's own checks apply. After `op.forceNonParallel()`, `op.flinkt().setParallelism(2)` fails exactly as `op.setParallelism(2)` does.
 
 Fluent configuration returns the view, so a chain stays in Flinkt. The same holds for the other Flink methods that keep the element type, such as `filter`, `union` and repartitioning, and for terminal calls such as `sinkTo`, `print` and `executeAndCollect`:
 
