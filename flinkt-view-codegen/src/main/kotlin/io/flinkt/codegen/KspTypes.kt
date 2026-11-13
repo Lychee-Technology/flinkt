@@ -148,6 +148,16 @@ internal fun KSClassDeclaration.isStreamType(): Boolean {
         getAllSuperTypes().any { it.declaration.qualifiedName?.asString() == DATA_STREAM }
 }
 
+/**
+ * Whether [this] is Flink's `TypeInformation`, or a subclass of it. A stream's method that returns one reads a type
+ * of that stream, as `DataStream.getType()` reads its output type.
+ */
+internal fun KSType.isTypeInformation(): Boolean {
+    val declaration = declaration as? KSClassDeclaration ?: return false
+    return declaration.qualifiedName() == TYPE_INFORMATION ||
+        declaration.getAllSuperTypes().any { it.declaration.qualifiedName?.asString() == TYPE_INFORMATION }
+}
+
 /** Whether [this] mentions a type parameter of the method, named in [names], at any depth. */
 internal fun KSType.mentions(names: Set<String>): Boolean {
     val declaration = declaration
@@ -198,6 +208,7 @@ internal fun describe(type: KSType): String {
 private const val STREAM_PACKAGE = "org.apache.flink.streaming.api.datastream"
 private const val DATA_STREAM = "$STREAM_PACKAGE.DataStream"
 private const val DATA_STREAM_SINK = "$STREAM_PACKAGE.DataStreamSink"
+private const val TYPE_INFORMATION = "org.apache.flink.api.common.typeinfo.TypeInformation"
 private val ANY = setOf("kotlin.Any", "java.lang.Object")
 
 private val PRIMITIVE_ARRAYS = setOf(

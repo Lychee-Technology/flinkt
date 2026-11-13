@@ -11,9 +11,12 @@ import io.flinkt.testing.compile.CompilationResult
 import io.flinkt.testing.compile.KotlinCompiler
 import io.flinkt.testing.compile.SourceFile
 import java.io.File
+import org.apache.flink.api.common.typeinfo.Types
 import org.apache.flink.streaming.api.datastream.DataStream
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -142,6 +145,25 @@ class ViewCodegenTest {
     }
 
     @Test
+    fun `a method that reads the type of the stream the view holds fails the build`() {
+        ViewCodegen.compile(views(stream = listOf("getType")))
+            .assertFailure(
+                "DataStream.getType() returns TypeInformation<T>, so its forwarder would read the type of the stream the " +
+                    "view holds. A view never reads it: Flink marks a stream's type as used when it's read, and a later " +
+                    "returns() on the Flink object would then throw. Call it on asFlink() where it's needed.",
+            )
+
+        // The reason the refusal gives, on this line's Flink: returns() works on an operator whose type nothing has read,
+        // and throws once getType() has read it.
+        val numbers = StreamExecutionEnvironment.getExecutionEnvironment().fromSequence(1, 10)
+        numbers.filter { it > 2 }.returns(Types.LONG)
+        val read = numbers.filter { it > 2 }
+        read.type
+        val refused = assertThrows(IllegalStateException::class.java) { read.returns(Types.LONG) }
+        assertTrue("after it has been used" in refused.message.orEmpty(), refused.toString())
+    }
+
+    @Test
     fun `every refusal of a build is reported`() {
         val result = ViewCodegen.compile(views(stream = listOf("noSuchMethod", "map", "getTransformation"), operator = listOf("name")))
             .assertFailure("noSuchMethod", "DataStream.map(", "DataStream.getTransformation()")
@@ -234,20 +256,7 @@ class ViewCodegenTest {
         }
         val result = ViewCodegen.compile(
             views(operator = listOf("setParallelism")),
-            SourceFile(
-                "sample/Source.kt",
-                """
-                package sample
-
-                import io.flinkt.codegen.FlinkView
-                import org.apache.flink.streaming.api.datastream.DataStreamSource
-
-                @FlinkView(DataStreamSource::class, forward = ["setParallelism"])
-                class Source<T>(private val source: DataStreamSource<T>) : Operator<T>(source), SourceForwarders<T> {
-                    override fun asFlink(): DataStreamSource<T> = source
-                }
-                """.trimIndent(),
-            ),
+            sourceView("setParallelism"),
             job(
                 """
                 import io.flinkt.testing.exactTypeOf
@@ -264,6 +273,50 @@ class ViewCodegenTest {
         )
         result.assertSuccess()
         assertTrue("public override fun setParallelism(parallelism: kotlin.Int): sample.Source<T>" in result.generated("Source"))
+    }
+
+    @Test
+    fun `a method two views above declares is forwarded by the view of the class that declares it`() {
+        // Source's parent view is Operator, but DataStream declares filter, and Stream is its view.
+        ViewCodegen.compile(views(), sourceView("filter"))
+            .assertFailure("Source forwards filter, which DataStream declares. Stream views DataStream, and SourceForwarders extends StreamForwarders: forward filter there.")
+    }
+
+    @Test
+    fun `a name that a Flink subclass declares and inherits overloads of is forwarded by both views`() {
+        val result = ViewCodegen.compile(
+            views(stream = listOf("rebalance")),
+            taggedView(),
+            job(
+                """
+                import io.flinkt.testing.exactTypeOf
+                import io.flinkt.testing.shouldBe
+
+                fun job(tagged: TaggedView<String>) {
+                    exactTypeOf(tagged.rebalance()).shouldBe<Stream<String>>()
+                    exactTypeOf(tagged.rebalance(tag = "east")).shouldBe<Stream<String>>()
+                }
+                """,
+            ),
+            flinkApiFile = taggedFlinkApi(),
+        ).assertSuccess()
+        // TaggedView forwards Tagged's own overload. DataStream's is StreamForwarders', which TaggedViewForwarders extends.
+        val generated = result.generated("TaggedView")
+        assertTrue("public fun rebalance(tag: kotlin.String): sample.Stream<T>" in generated, generated)
+        assertFalse("fun rebalance()" in generated, generated)
+    }
+
+    @Test
+    fun `a name that a Flink subclass declares and inherits overloads of fails the build unless the view above forwards it`() {
+        val result = ViewCodegen.compile(views(), taggedView(), flinkApiFile = taggedFlinkApi())
+            .assertFailure(
+                "TaggedView forwards rebalance, which covers all of its overloads, but Tagged inherits DataStream.rebalance(), " +
+                    "and Stream, the view of DataStream, doesn't forward rebalance. List rebalance on Stream too, so that each " +
+                    "overload is forwarded and checked.",
+            )
+        // Tagged's own overload passes, so the inherited one is the only refusal.
+        val refusals = result.errors.filter { it.file == "sample/Tagged.kt" }
+        assertEquals(1, refusals.size, refusals.toString())
     }
 
     @Test
@@ -300,4 +353,52 @@ class ViewCodegenTest {
     }
 
     private fun sinkFunctionClass(): Class<*> = DataStream::class.java.methods.single { it.name == "addSink" }.parameterTypes.single()
+
+    /** `Source<T>`, the view of `DataStreamSource`, below `Operator`, which forwards [forward]. */
+    private fun sourceView(vararg forward: String): SourceFile = SourceFile(
+        "sample/Source.kt",
+        """
+        package sample
+
+        import io.flinkt.codegen.FlinkView
+        import org.apache.flink.streaming.api.datastream.DataStreamSource
+
+        @FlinkView(DataStreamSource::class, forward = [${forward.joinToString { "\"$it\"" }}])
+        class Source<T>(private val source: DataStreamSource<T>) : Operator<T>(source), SourceForwarders<T> {
+            override fun asFlink(): DataStreamSource<T> = source
+        }
+        """.trimIndent(),
+    )
+
+    /**
+     * `Tagged<T>`, a subclass of `DataStream` that declares `rebalance(tag)` and inherits `DataStream.rebalance()`, and
+     * its view `TaggedView<T>`, below `Stream`, which forwards `rebalance`. Of the classes views hold, only 2.x's
+     * `KeyedStream` has such a name, and only type-introducing ones (`ViewCodegenLineTest`), so the test declares one.
+     */
+    private fun taggedView(): SourceFile = SourceFile(
+        "sample/Tagged.kt",
+        """
+        package sample
+
+        import io.flinkt.codegen.FlinkView
+        import org.apache.flink.api.dag.Transformation
+        import org.apache.flink.streaming.api.datastream.DataStream
+        import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
+
+        open class Tagged<T>(environment: StreamExecutionEnvironment, transformation: Transformation<T>) :
+            DataStream<T>(environment, transformation) {
+            fun rebalance(tag: String): DataStream<T> = rebalance()
+        }
+
+        @FlinkView(Tagged::class, forward = ["rebalance"])
+        class TaggedView<T>(private val tagged: Tagged<T>) : Stream<T>(tagged), TaggedViewForwarders<T> {
+            override fun asFlink(): Tagged<T> = tagged
+        }
+        """.trimIndent(),
+    )
+
+    /** The adapter's names file with a row for `Tagged.rebalance(tag)`. */
+    private fun taggedFlinkApi(): File = editedFlinkApiFile(dir) { lines ->
+        lines + "sample.Tagged\trebalance\ttag\t(Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStream;"
+    }
 }

@@ -188,18 +188,49 @@ internal class FlinkViewProcessor(
                         "in Flink $flinkVersion. Remove it from forward, or write it in the source set of the lines that have it.",
                 )
             }
-            // A method of the parent's Flink class, or above it, is the parent view's to forward.
-            val parentClasses = parent?.flinkClass?.let { setOf(it.qualifiedName()) + it.getAllSuperTypes().map { t -> t.declaration.qualifiedName() } }.orEmpty()
-            val own = overloads.filter { (it.parentDeclaration as? KSClassDeclaration)?.qualifiedName() !in parentClasses }
+            // A name covers all of its overloads, the inherited ones too. An overload that a class at or above a view
+            // above's Flink class declares is that view's to forward. The rest are this view's own.
+            val byViewAbove = overloads.groupBy(::viewAbove)
+            val own = byViewAbove[null].orEmpty()
             if (own.isEmpty()) {
-                val owner = (overloads.first().parentDeclaration as KSClassDeclaration).simpleName.asString()
-                return fail(
-                    "${view.simpleName} forwards $name, which $owner declares. ${parent!!.simpleName} views $owner, and " +
-                        "${view.forwardersSimpleName} extends ${parent.forwardersSimpleName}: forward $name there.",
+                // Every overload is a view above's to forward, so the name is listed there, not here.
+                for ((above, methods) in byViewAbove) {
+                    val owners = methods.map { it.declaringClass().simpleName.asString() }.distinct()
+                    fail<Forwarder>(
+                        "${view.simpleName} forwards $name, which ${owners.joinToString(" and ")} " +
+                            "${if (owners.size == 1) "declares" else "declare"}. ${above!!.simpleName} views " +
+                            "${above.flinkClass.simpleName.asString()}, and ${view.forwardersSimpleName} extends " +
+                            "${above.forwardersSimpleName}: forward $name there.",
+                    )
+                }
+                return emptyList()
+            }
+            // The view's Flink class declares overloads of its own and inherits others. The view above has to forward
+            // those, or they'd be neither forwarded nor checked.
+            for ((above, methods) in byViewAbove) {
+                if (above == null || name in above.forward) continue
+                fail<Forwarder>(
+                    "${view.simpleName} forwards $name, which covers all of its overloads, but ${flinkClass.simpleName.asString()} " +
+                        "inherits ${methods.joinToString(" and ") { describe(it, it.declaringClass()) }}, and " +
+                        "${above.simpleName}, the view of ${above.flinkClass.simpleName.asString()}, doesn't forward $name. " +
+                        "List $name on ${above.simpleName} too, so that each overload is forwarded and checked.",
                 )
             }
             return own.mapNotNull(::forwarder).sortedBy { it.signature }
         }
+
+        /**
+         * The view above that forwards [method] when it lists its name: the farthest view of a superclass of
+         * [flinkClass] whose Flink class is, or extends, the class that declares [method]. The view above that one, if
+         * any, views a class above the declaring class, so [method] is that view's own. Null when [method] is this
+         * view's own: [flinkClass] declares it, or a class between [flinkClass] and [parent]'s Flink class does.
+         */
+        private fun viewAbove(method: KSFunctionDeclaration): View? {
+            val declaring = method.declaringClass().qualifiedName()
+            return ancestors.lastOrNull { declaring in it.flinkClasses }
+        }
+
+        private fun KSFunctionDeclaration.declaringClass(): KSClassDeclaration = parentDeclaration as KSClassDeclaration
 
         private fun forwarder(method: KSFunctionDeclaration): Forwarder? {
             val owner = method.parentDeclaration as KSClassDeclaration
@@ -211,6 +242,15 @@ internal class FlinkViewProcessor(
             val types = method.parameters.map { it.type.resolve() } + returnType
             types.firstOrNull { it.hasError() }?.let { type ->
                 return failOne("$signature uses ${describe(type)}, which isn't on the compile classpath, so its forwarder can't be written.")
+            }
+            if (returnType.isTypeInformation()) {
+                // Rule 1 of the views (docs/architecture.md, "Views"): Transformation.getOutputType() marks the type as
+                // used, so after DataStream.getType() a returns() on the Flink object throws.
+                return failOne(
+                    "$signature returns ${describe(returnType)}, so its forwarder would read the type of the stream the " +
+                        "view holds. A view never reads it: Flink marks a stream's type as used when it's read, and a later " +
+                        "returns() on the Flink object would then throw. Call it on asFlink() where it's needed.",
+                )
             }
             val methodTypeParameters = method.typeParameters.map { it.name.asString() }.toSet()
             if (returnType.mentions(methodTypeParameters)) {
@@ -404,6 +444,11 @@ internal class FlinkViewProcessor(
         val forwardersSimpleName: String = simpleName + "Forwarders"
         val forwardersQualifiedName: String = if (packageName.isEmpty()) forwardersSimpleName else "$packageName.$forwardersSimpleName"
         val typeParameterNames: List<String> = declaration.typeParameters.map { it.name.asString() }
+
+        /** [flinkClass] and every class and interface above it: where the methods this view or a view above forwards are declared. */
+        val flinkClasses: Set<String> by lazy {
+            setOf(flinkClassName) + flinkClass.getAllSuperTypes().mapNotNull { it.declaration.qualifiedName?.asString() }
+        }
 
         /** The JVM name and parameter descriptors of each forwarded method, which a subclass's view overrides. */
         val signatures = mutableSetOf<String>()

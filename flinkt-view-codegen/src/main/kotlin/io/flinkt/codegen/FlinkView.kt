@@ -13,11 +13,14 @@ import kotlin.reflect.KClass
  * view, with the view's one-argument constructor.
  *
  * The build fails when a listed method is missing on the line, is `@Internal`, returns a type built from one of its
- * own type parameters, or returns a Flink stream type that has no view.
+ * own type parameters, returns a `TypeInformation`, which would read the type of the stream the view holds, or returns
+ * a Flink stream type that has no view.
  *
  * When a superclass of [flinkClass] has a view too, the generated interface extends that view's, and [forward] lists
  * only methods that [flinkClass] or a class below that superclass declares. Each method is forwarded by the view of
- * the class that declares it, so every view below gets it.
+ * the class that declares it, so every view below gets it. A name that has overloads [flinkClass] declares and
+ * overloads it inherits from a class with a view is listed on that view too, and the build fails if it isn't, so that
+ * each overload is forwarded.
  *
  * The annotation has source retention: it never reaches a class file, and this module never reaches a published
  * runtime classpath. See docs/architecture.md, "Generated forwarders".
