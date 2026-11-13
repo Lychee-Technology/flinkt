@@ -33,7 +33,10 @@ private val KEY_KINDS: Set<BuiltInKind> = EnumSet.of(
     BuiltInKind.STRING,
 )
 
-/** Flink's `TypeInformation` for each of [KEY_KINDS], the constant that typeInfo() gives for it. */
+/**
+ * Flink's `TypeInformation` for each of [KEY_KINDS], the constant that typeInfo() gives for it. [checkKeyType] compares
+ * by equality, so a copy of a constant, such as the one Java serialization gives back, is accepted too.
+ */
 private val KEY_TYPES: List<TypeInformation<*>> = listOf(
     BasicTypeInfo.BOOLEAN_TYPE_INFO,
     BasicTypeInfo.BYTE_TYPE_INFO,
@@ -66,15 +69,24 @@ internal fun keyTypeInfo(type: KType): TypeInformation<*> {
 }
 
 /**
- * Refuses a [keyType] that isn't Flink's `BasicTypeInfo` for one of [KEY_KINDS]. A `TypeInformation` doesn't carry
- * the Kotlin type, so the message names it by its `toString()`.
+ * Refuses a [keyType] that isn't Flink's `BasicTypeInfo` for one of [KEY_KINDS].
+ *
+ * It accepts a `TypeInformation` equal to one of [KEY_TYPES], not only the constant itself: a `TypeInformation` is
+ * `Serializable`, and one that a job or a library deserialized is a copy, equal to the constant but not the same
+ * object. `BasicTypeInfo.equals` compares the boxed class, the comparator class and the serializer, and Flink's
+ * built-in serializers are equal only to a serializer of their own class, so an equal copy gives a key the same bytes
+ * and comparisons. Its class has to be the constant's own class, `BasicTypeInfo`, `IntegerTypeInfo` or
+ * `FractionalTypeInfo`: a subclass can override `createSerializer` and still be equal, because
+ * `BasicTypeInfo.canEqual` accepts every subclass.
+ *
+ * A `TypeInformation` doesn't carry the Kotlin type, so the message names it by its `toString()` and its class.
  */
 internal fun checkKeyType(keyType: TypeInformation<*>) {
-    if (KEY_TYPES.none { it === keyType }) {
+    if (KEY_TYPES.none { it.javaClass == keyType.javaClass && it == keyType }) {
         throw IllegalArgumentException(
-            "keyBy doesn't accept the key type $keyType yet. Until Flinkt's key rules are implemented, the view's " +
-                "keyBy accepts only Flink's BasicTypeInfo for a non-null $KEY_NAMES key, the one typeInfo() gives " +
-                "for it, and keys of other types wait for those rules. $ESCAPE",
+            "keyBy doesn't accept the key type $keyType (${keyType.javaClass.name}) yet. Until Flinkt's key rules " +
+                "are implemented, the view's keyBy accepts only Flink's BasicTypeInfo for a non-null $KEY_NAMES key, " +
+                "the one typeInfo() gives for it, and keys of other types wait for those rules. $ESCAPE",
         )
     }
 }

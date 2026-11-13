@@ -64,8 +64,9 @@ public open class FlinktDataStream<T> internal constructor(
      * Flink's `keyBy(key, keyType)` on the stream this view holds, for code where [K] isn't known at the call site.
      *
      * Until Flinkt's key rules are implemented, [keyType] has to be Flink's `BasicTypeInfo` for a non-null `Boolean`,
-     * `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Char` or `String`, the one `typeInfo()` gives for it. Flink's
-     * own rules for other key types are reached through `asFlink().keyBy(…)`.
+     * `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Char` or `String`: the one `typeInfo()` gives for it, or a copy
+     * of it, such as one Java serialization gave back, but not a subclass. Flink's own rules for other key types are
+     * reached through `asFlink().keyBy(…)`.
      *
      * @throws IllegalArgumentException if [keyType] is any other `TypeInformation`. Flink isn't called.
      */

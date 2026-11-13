@@ -3,15 +3,23 @@ package io.flinkt.flink
 import io.flinkt.FlinkType
 import io.flinkt.flink.StreamGraphs.transformations
 import io.flinkt.types.UnsupportedTypeException
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
+import java.io.Serializable
 import java.math.BigDecimal
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo
 import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.apache.flink.api.common.typeinfo.Types
+import org.apache.flink.api.common.typeutils.base.StringComparator
+import org.apache.flink.api.common.typeutils.base.StringSerializer
 import org.apache.flink.api.java.functions.KeySelector
 import org.apache.flink.api.java.typeutils.GenericTypeInfo
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -47,6 +55,21 @@ class KeyByTest {
         assertSame(BasicTypeInfo.LONG_TYPE_INFO, events.keyBy(KeySelector { it }, Types.LONG).asFlink().keyType)
         assertSame(BasicTypeInfo.STRING_TYPE_INFO, events.keyBy(KeySelector { it.toString() }, Types.STRING).asFlink().keyType)
         assertSame(BasicTypeInfo.CHAR_TYPE_INFO, events.keyBy(KeySelector { 'a' }, BasicTypeInfo.getInfoFor(Char::class.javaObjectType)).asFlink().keyType)
+    }
+
+    @Test
+    fun `the overload that takes a TypeInformation accepts a copy of Flink's BasicTypeInfo that Java serialization gave back`() {
+        // A TypeInformation is Serializable, so a job or a library can hold a deserialized one: equal to Flink's
+        // constant, but not the same object. The view passes Flink that copy, as it passes any keyType.
+        assertKeyedByCopy(BasicTypeInfo.BOOLEAN_TYPE_INFO) { it % 2 == 0L }
+        assertKeyedByCopy(BasicTypeInfo.BYTE_TYPE_INFO) { it.toByte() }
+        assertKeyedByCopy(BasicTypeInfo.SHORT_TYPE_INFO) { it.toShort() }
+        assertKeyedByCopy(BasicTypeInfo.INT_TYPE_INFO) { it.toInt() }
+        assertKeyedByCopy(BasicTypeInfo.LONG_TYPE_INFO) { it }
+        assertKeyedByCopy(BasicTypeInfo.FLOAT_TYPE_INFO) { it.toFloat() }
+        assertKeyedByCopy(BasicTypeInfo.DOUBLE_TYPE_INFO) { it.toDouble() }
+        assertKeyedByCopy(BasicTypeInfo.CHAR_TYPE_INFO) { 'a' + (it % 26).toInt() }
+        assertKeyedByCopy(BasicTypeInfo.STRING_TYPE_INFO) { it.toString() }
     }
 
     @Test
@@ -92,20 +115,32 @@ class KeyByTest {
     }
 
     @Test
-    fun `the overload that takes a TypeInformation refuses one outside the built-ins, naming it, before it calls Flink`() {
+    fun `the overload that takes a TypeInformation refuses one outside the built-ins, naming it and its class, before it calls Flink`() {
+        // Equal to Flink's constant, because BasicTypeInfo.canEqual accepts every subclass, but a subclass can create
+        // another serializer, so equality alone doesn't make it Flink's.
+        assertEquals(BasicTypeInfo.STRING_TYPE_INFO, StringLookalike())
         val before = transformations(env)
-        val refusals: List<Pair<String, () -> Any>> = listOf(
-            "List<String>" to { events.keyBy(KeySelector { listOf(it.toString()) }, Types.LIST(Types.STRING)) },
-            "BigDecimal" to { events.keyBy(KeySelector { BigDecimal.valueOf(it) }, BasicTypeInfo.BIG_DEC_TYPE_INFO) },
-            "GenericType<java.lang.String>" to { events.keyBy(KeySelector { it.toString() }, GenericTypeInfo(String::class.java)) },
+        val refusals: List<Triple<String, String, () -> Any>> = listOf(
+            Triple("List<String>", "org.apache.flink.api.java.typeutils.ListTypeInfo") {
+                events.keyBy(KeySelector { listOf(it.toString()) }, Types.LIST(Types.STRING))
+            },
+            Triple("BigDecimal", "org.apache.flink.api.common.typeinfo.BasicTypeInfo") {
+                events.keyBy(KeySelector { BigDecimal.valueOf(it) }, BasicTypeInfo.BIG_DEC_TYPE_INFO)
+            },
+            Triple("GenericType<java.lang.String>", "org.apache.flink.api.java.typeutils.GenericTypeInfo") {
+                events.keyBy(KeySelector { it.toString() }, GenericTypeInfo(String::class.java))
+            },
+            Triple("String", "io.flinkt.flink.KeyByTest\$StringLookalike") {
+                events.keyBy(KeySelector { it.toString() }, StringLookalike())
+            },
         )
-        for ((name, keyBy) in refusals) {
+        for ((name, className, keyBy) in refusals) {
             val e = assertThrows<IllegalArgumentException>(name) { keyBy() }
             assertEquals(
-                "keyBy doesn't accept the key type $name yet. Until Flinkt's key rules are implemented, the view's " +
-                    "keyBy accepts only Flink's BasicTypeInfo for a non-null Boolean, Byte, Short, Int, Long, Float, " +
-                    "Double, Char or String key, the one typeInfo() gives for it, and keys of other types wait for " +
-                    "those rules. To key the stream by Flink's own rules instead, call asFlink().keyBy(...).",
+                "keyBy doesn't accept the key type $name ($className) yet. Until Flinkt's key rules are implemented, " +
+                    "the view's keyBy accepts only Flink's BasicTypeInfo for a non-null Boolean, Byte, Short, Int, " +
+                    "Long, Float, Double, Char or String key, the one typeInfo() gives for it, and keys of other types " +
+                    "wait for those rules. To key the stream by Flink's own rules instead, call asFlink().keyBy(...).",
                 e.message,
             )
         }
@@ -131,6 +166,25 @@ class KeyByTest {
         return e.message
     }
 
+    /**
+     * Keys [events] by [key] with a Java-serialized copy of [constant], and checks that the copy is a copy and that
+     * Flink got that copy as the key type.
+     */
+    private fun <K> assertKeyedByCopy(constant: TypeInformation<K>, key: KeySelector<Long, K>) {
+        val copy = javaCopy(constant)
+        // What the case is about: an object equal to the constant, not the constant.
+        assertNotSame(constant, copy, "$constant")
+        assertEquals(constant, copy, "$constant")
+        assertSame(copy, events.keyBy(key, copy).asFlink().keyType, "$constant")
+    }
+
+    /** [value], written with Java serialization and read back. */
+    private fun <V : Serializable> javaCopy(value: V): V {
+        val bytes = ByteArrayOutputStream().also { out -> ObjectOutputStream(out).use { it.writeObject(value) } }
+        @Suppress("UNCHECKED_CAST")
+        return ObjectInputStream(ByteArrayInputStream(bytes.toByteArray())).use { it.readObject() } as V
+    }
+
     private fun assertSameElements(expected: List<*>, actual: List<*>) {
         assertEquals(expected.size, actual.size, "$actual")
         expected.zip(actual).forEach { (e, a) -> assertSame(e, a) }
@@ -151,4 +205,12 @@ class KeyByTest {
     }
 
     object Origin
+
+    /** A subclass of Flink's `BasicTypeInfo` for `String`, with Flink's serializer and comparator. */
+    class StringLookalike : BasicTypeInfo<String>(
+        String::class.java,
+        arrayOf<Class<*>>(),
+        StringSerializer.INSTANCE,
+        StringComparator::class.java,
+    )
 }
