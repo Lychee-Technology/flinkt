@@ -479,7 +479,7 @@ Compile contracts show which static type a call returns. They can't show that th
 - nodes and edges;
 - partitioners;
 - operator classes;
-- output types;
+- output types and key types, as `TypeInformation`, not only through their serializers, because two different `TypeInformation`s can create equal serializers;
 - parallelism and max parallelism;
 - UIDs and names.
 

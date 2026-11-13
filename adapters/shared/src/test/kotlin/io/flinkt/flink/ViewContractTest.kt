@@ -11,6 +11,7 @@ import org.apache.flink.api.common.typeinfo.BasicTypeInfo
 import org.apache.flink.api.common.typeinfo.Types
 import org.apache.flink.api.common.typeutils.base.IntSerializer
 import org.apache.flink.api.common.typeutils.base.LongSerializer
+import org.apache.flink.api.common.typeutils.base.StringComparator
 import org.apache.flink.api.common.typeutils.base.StringSerializer
 import org.apache.flink.api.java.functions.KeySelector
 import org.apache.flink.api.java.typeutils.GenericTypeInfo
@@ -26,6 +27,7 @@ import org.apache.flink.streaming.runtime.partitioner.KeyGroupStreamPartitioner
 import org.apache.flink.util.Collector
 import org.apache.flink.util.OutputTag
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -51,9 +53,13 @@ class ViewContractTest {
             fromSequence(1, 100).flinkt().map(toText, Types.STRING).keyBy(byLength, Types.INT).process(count, Types.LONG)
         }
 
-        val graph = structure(direct)
-        assertEquals(graph, structure(reified))
-        assertEquals(graph, structure(explicit))
+        val graphs = listOf("direct" to direct, "reified" to reified, "explicit" to explicit).map { (name, env) ->
+            name to structure(env)
+        }
+        val graph = graphs.first().second
+        for ((name, built) in graphs) {
+            assertEquals(graph, built, name)
+        }
         // What the graph is, so that the comparison can't pass on two empty or untyped graphs.
         assertEquals(listOf("Source: Sequence Source", "Map", "KeyedProcess"), graph.map { it.name })
         val (source, map, process) = graph
@@ -67,6 +73,26 @@ class ViewContractTest {
         assertEquals(listOf(byLength), process.keySelectors)
         assertEquals(IntSerializer.INSTANCE, process.keySerializer)
         assertEquals(LongSerializer.INSTANCE, process.outputSerializer)
+        // The TypeInformation each operator got, in each graph: the view's map and keyed process, reified and
+        // explicit, give Flink the type the direct calls give it, which is Flink's own constant for a built-in.
+        for ((name, built) in graphs) {
+            val (_, builtMap, builtProcess) = built
+            assertSame(BasicTypeInfo.STRING_TYPE_INFO, builtMap.outputType, name)
+            assertSame(BasicTypeInfo.INT_TYPE_INFO, builtProcess.keyType, name)
+            assertSame(BasicTypeInfo.LONG_TYPE_INFO, builtProcess.outputType, name)
+        }
+    }
+
+    @Test
+    fun `the graph comparison tells apart two output types whose serializers are equal`() {
+        val expected = structure(environment().apply { fromSequence(1, 100).map(toText, Types.STRING) })
+        val other = structure(environment().apply { fromSequence(1, 100).map(toText, OtherStringType()) })
+
+        // Only the output type differs, so a comparison of serializers alone would pass.
+        assertEquals(expected[1].outputSerializer, other[1].outputSerializer)
+        assertEquals(expected, other.map { if (it.outputType is OtherStringType) it.copy(outputType = Types.STRING) else it })
+        assertNotEquals(expected, other)
+        assertNotEquals(other, expected)
     }
 
     @Test
@@ -115,7 +141,9 @@ class ViewContractTest {
         assertEquals(listOf(StreamGraphs.Edge(1, ForwardPartitioner::class.java, 0)), source.edges)
         assertEquals(KeyedProcessOperator::class.java, process.operator)
         assertEquals(listOf(bySelf), process.keySelectors)
+        assertSame(BasicTypeInfo.LONG_TYPE_INFO, process.keyType)
         assertEquals(LongSerializer.INSTANCE, process.keySerializer)
+        assertSame(BasicTypeInfo.LONG_TYPE_INFO, process.outputType)
     }
 
     @Test
@@ -202,6 +230,24 @@ class ViewContractTest {
 
     class Passthrough<K, X> : KeyedProcessFunction<K, X, X>() {
         override fun processElement(value: X, ctx: Context, out: Collector<X>) = out.collect(value)
+    }
+
+    /**
+     * A `TypeInformation` for `String` that creates Flink's `StringSerializer`, as Flink's own does, and is equal only
+     * to another of its class: what an operator that was given the wrong type could carry without changing its
+     * serializer.
+     */
+    class OtherStringType : BasicTypeInfo<String>(
+        String::class.java,
+        arrayOf<Class<*>>(),
+        StringSerializer.INSTANCE,
+        StringComparator::class.java,
+    ) {
+        override fun canEqual(obj: Any?): Boolean = obj is OtherStringType
+
+        override fun equals(other: Any?): Boolean = other is OtherStringType
+
+        override fun hashCode(): Int = OtherStringType::class.java.hashCode()
     }
 
     /** Emits even values, and odd ones to the side output [ODD]. */
