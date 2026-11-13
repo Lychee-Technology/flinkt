@@ -13,7 +13,7 @@ This page records how Flinkt is built and why: the module layout, the toolchain,
 | `flinkt-flink120` | `adapters/flinkt-flink120/` | yes | the Flink 1.20 adapter |
 | `test-support` | `test-support/` | no | the exact-type carrier and the compile-test harness |
 
-Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
+Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry) and the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types, the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
 
 ### Adapters
 
@@ -62,7 +62,7 @@ The Gradle wrapper pins Gradle 9.9.1 with its distribution checksum.
 
 ## Public API
 
-Published modules compile in Kotlin's explicit API mode: a declaration without a visibility modifier is an error. Each has an ABI dump at `api/<module>.api`, written by the Kotlin Gradle plugin's ABI validation. `check` runs `checkKotlinAbi`, which fails when the compiled public ABI differs from the dump. After an intended API change, `./gradlew updateKotlinAbi` rewrites the dumps, and their diff is what review reads ([Flinkt API compatibility](testing.md#flinkt-api-compatibility)). Only `flinkt-core`'s dump has content so far.
+Published modules compile in Kotlin's explicit API mode: a declaration without a visibility modifier is an error. Each has an ABI dump at `api/<module>.api`, written by the Kotlin Gradle plugin's ABI validation. `check` runs `checkKotlinAbi`, which fails when the compiled public ABI differs from the dump. After an intended API change, `./gradlew updateKotlinAbi` rewrites the dumps, and their diff is what review reads ([Flinkt API compatibility](testing.md#flinkt-api-compatibility)). `flinkt-ksp`'s dump is still empty. An adapter's dump has `typeInfo`'s non-inline entry point but not the reified `typeInfo<T>()`, which is synthetic in bytecode, so compile tests pin its source API ([Type information](architecture.md#type-information)).
 
 The plugin's ABI validation DSL is experimental in Kotlin 2.4.21: it needs `@OptIn(ExperimentalAbiValidation::class)`, and a later Kotlin release may change it. If it does, the change is confined to `flinkt.published`. The standalone binary-compatibility-validator plugin writes the same dump format.
 

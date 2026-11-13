@@ -231,6 +231,19 @@ A type registered twice fails the registry, with an error naming both modules. A
 
 **Schema model.** A module registers each declaration's schema with its codec factory: a record's fields in primary-constructor order with their names and full types, a value class's underlying property, an enum's constants and a sealed type's subtypes with their `@FlinkId`s, and type parameters. A schema names types by strings, never by `Class`, so a schema read back from a snapshot can describe a type the current classpath doesn't have. A declaration is named by its JVM class name, and a type Kotlin maps to a Java class by its Kotlin name, which is what tells `List` from `MutableList`. What a snapshot persists of it is #5's decision.
 
+## Type information
+
+Implemented for built-in types in [#7](https://github.com/Lychee-Technology/flinkt/issues/7), in the shared adapter source.
+
+`typeInfo<T>()` is inline and reified. It passes `typeOf<T>()` to a non-inline function, which resolves it with a `TypeRegistry` and gives Flink a `TypeInformation` for the resolution:
+
+- **A built-in kind** gives Flink's own `BasicTypeInfo` for the kind's boxed JVM class, the one `BasicTypeInfo.getInfoFor` returns for that class. Flink then creates its own serializer, such as `IntSerializer` or `StringSerializer`, from its own configuration, so a top-level built-in's bytes are Flink's on every line, and Flinkt adds no persisted format for them. The mapping is a `when` over `BuiltInKind` with no fallback branch, so a kind that core adds doesn't compile in the adapter until it's mapped. Flink has a `BasicTypeInfo` for more classes, such as `BigDecimal`, `Instant` and `Date`, but each mapping fixes a type's state format. So each further one is its own change with its reason recorded, and until then those types fail like any other.
+- **Every other type** throws `UnsupportedTypeException` naming the canonical type, core's reason, and the README's [two fixes](../README.md#when-something-isnt-supported): annotate the type with `@FlinkType`, or pass a `TypeInformation` explicitly. That covers nullable types (#15), `List` and `Map` (#17), and every type core can't resolve. A generated type that a module registers fails too, until #12 gives it a `TypeInformation`. It fails before it's resolved, nullable or not, because resolving it would run its module's codec factory and every factory that one calls, only to discard the codec, and a factory that fails first, with a nested type's reason or an exception of its own, would hide why the type fails. Its message gives both fixes too, and says that the annotation is already there and gives it no `TypeInformation` in this release, so that it's the explicit `TypeInformation` that works for now. Nothing falls back to Flink's `TypeExtractor` or to a `GenericTypeInfo` ([flink-compatibility.md](flink-compatibility.md#do-not-build-correctness-around-typeextractor)).
+
+**Registry.** Each call loads a new registry from the generated modules that the current thread's context class loader finds. In a task, Flink's `Task` sets that loader to the job's user-code class loader before it runs user code (checked in the 1.20.5 and 2.3.0 sources). Which loader is current where the job's `main()` builds the graph isn't checked yet. A built-in resolves to its kind in every registry, so for now the choice only decides how a generated type fails. #12 decides which class loader resolves a generated type, with evidence for both places, and #24 how long a registry lives.
+
+The only Flink API that `typeInfo` uses is `TypeInformation` and `BasicTypeInfo`'s constants, both `@Public` on 1.20 and 2.x. The reified function is synthetic in bytecode, so the adapter's ABI dump shows only the non-inline function, whose JVM signature the inlined calls depend on. Compile tests pin the reified function's source API on both compilers.
+
 ## State helpers
 
 Two helper families have different names because they return different things:

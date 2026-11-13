@@ -2,6 +2,7 @@ package io.flinkt.flink
 
 import io.flinkt.testing.compile.KotlinCompilation
 import org.apache.flink.FlinkVersion
+import org.apache.flink.api.common.ExecutionConfig
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
@@ -22,5 +23,15 @@ class Flink120LineTest {
                 """,
             )
             .assertFailure("UNRESOLVED_REFERENCE", "Unresolved reference 'enableAsyncState'")
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun `1_20's ExecutionConfig serializer factory creates Flink's own serializer for each built-in`() {
+        // Only 1.20 has it: the abstract factory there, removed in 2.x. BasicTypeInfo implements both factories.
+        val config = ExecutionConfig()
+        for (case in TypeInfoTest.builtIns) {
+            assertEquals(case.serializer, case.typeInfo.createSerializer(config).javaClass, case.kind.kotlinName)
+        }
     }
 }
