@@ -27,7 +27,8 @@ import org.junit.jupiter.api.assertThrows
 /**
  * The resource limits of record format version 1 (docs/persisted-format.md, "Resource limits"): the string and
  * collection budgets, which the writer enforces too, what a corrupt length can make a reader allocate, the rule that
- * makes every turn of a loop over a collection consume input, and the old-layout walker's work.
+ * makes every turn of a loop over a collection consume input, and the old-layout walker's work, its duplicate-key check
+ * included.
  */
 class ResourceLimitsTest {
     private val max = RecordFormat.MAX_COLLECTION_SIZE
@@ -187,10 +188,57 @@ class ResourceLimitsTest {
         assertEquals(16, over.available())
     }
 
+    @Test
+    fun `the old-layout walker keeps only a map's keys' bytes, a constant factor of the bytes it consumed`() {
+        // A removed Map<Int, Long?> whose size claims the budget, then a mebibyte of distinct entries, each a key and
+        // a null marker: every byte is consumed, then the input ends. To find a key that's there twice, the walker
+        // keeps each key's bytes, and nothing else.
+        val root = map(type("kotlin.Int"), type("kotlin.Long", nullable = true))
+        val walker = SchemaWalker(PersistedSchema.of(root) { null })
+        val data = int(max) + Bytes.of { repeat((1 shl 20) / 5) { writeInt(it); writeByte(0) } }
+        val input = DataInputDeserializer(data)
+        val allocated = allocatedBy { assertThrows<EOFException> { walker.skipValue(root, input) } }
+        assertEquals(0, input.available())
+        assertTrue(allocated < 64L * data.size, "walking ${data.size} bytes allocated $allocated")
+    }
+
+    @Test
+    fun `a removed map's duplicate-key check finds a key that's there twice among many`() {
+        // 2^16 distinct keys that share a 32-char prefix, then the first one again: the codec's reader and the walker
+        // read every key, and both fail on the last.
+        val keys = 1 shl 16
+        fun key(i: Int) = "k".repeat(32) + i.toString(36)
+        fun entries(vararg extra: String) = Bytes.of {
+            writeInt(keys + extra.size)
+            for (i in 0 until keys) { string(key(i)); writeByte(0) }
+            for (k in extra) { string(k); writeByte(0) }
+        }
+        val root = map(type("kotlin.String"), type("kotlin.Long", nullable = true))
+        val walker = SchemaWalker(PersistedSchema.of(root) { null })
+        fun codec(bytes: ByteArray) = RecordFormat.readMap(DataInputDeserializer(bytes), { RecordFormat.readString(it) }) {
+            if (RecordFormat.readNullMarker(it)) RecordFormat.readLong(it) else null
+        }
+        val distinct = entries()
+        assertEquals(keys, codec(distinct).size)
+        val input = DataInputDeserializer(distinct)
+        walker.skipValue(root, input)
+        assertEquals(0, input.available())
+
+        val twice = entries(key(0))
+        assertEquals("a map holds the key ${key(0)} twice", assertThrows<MalformedDataException> { codec(twice) }.message)
+        val e = assertThrows<MalformedDataException> { walker.skipValue(root, DataInputDeserializer(twice)) }
+        assertEquals("a map holds the key written as 22 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b … (34 bytes) twice", e.message)
+    }
+
     private fun type(name: String, nullable: Boolean = false) = SchemaType.ClassType(name, isNullable = nullable)
 
     private fun list(element: SchemaType) =
         SchemaType.ClassType("kotlin.collections.List", listOf(SchemaTypeArgument.invariant(element)))
+
+    private fun map(key: SchemaType, value: SchemaType) = SchemaType.ClassType(
+        "kotlin.collections.Map",
+        listOf(SchemaTypeArgument.invariant(key), SchemaTypeArgument.invariant(value)),
+    )
 
     private fun int(value: Int): ByteArray = ByteBuffer.allocate(4).putInt(value).array()
 
@@ -213,12 +261,12 @@ class ResourceLimitsTest {
         DataInputStream(SequenceInputStream(ByteArrayInputStream(prefix), object : InputStream() {
             override fun read(): Int = fill
         }))
+}
 
-    /** The bytes this thread allocates while [block] runs. */
-    private fun allocatedBy(block: () -> Unit): Long {
-        val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
-        val before = threads.getThreadAllocatedBytes(Thread.currentThread().id)
-        block()
-        return threads.getThreadAllocatedBytes(Thread.currentThread().id) - before
-    }
+/** The bytes this thread allocates while [block] runs. */
+internal fun allocatedBy(block: () -> Unit): Long {
+    val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
+    val before = threads.getThreadAllocatedBytes(Thread.currentThread().id)
+    block()
+    return threads.getThreadAllocatedBytes(Thread.currentThread().id) - before
 }

@@ -225,6 +225,50 @@ object Declarations {
         }
     """
 
+    /** `User(id: Long, name: String, tags: Map<String, Long>)`. */
+    val USER_WITH_TAGS = """
+        @FlinkType
+        data class User(val id: Long, val name: String, val tags: Map<String, Long>)
+
+        object UserCodec : GeneratedCodec<User> {
+            override fun serialize(value: User, output: DataOutput) {
+                RecordFormat.writeLong(output, value.id)
+                RecordFormat.writeString(output, value.name)
+                RecordFormat.writeMap(output, value.tags, { out, k -> RecordFormat.writeString(out, k) }, { out, v -> RecordFormat.writeLong(out, v) })
+            }
+
+            override fun deserialize(input: DataInput): User {
+                val id = RecordFormat.readLong(input)
+                val name = RecordFormat.readString(input)
+                val tags = RecordFormat.readMap(input, { RecordFormat.readString(it) }, { RecordFormat.readLong(it) })
+                return User(id = id, name = name, tags = tags)
+            }
+
+            override fun copy(value: User): User = value
+        }
+
+        class Types : GeneratedTypeModule {
+            override fun register(registry: MutableTypeRegistry) {
+                val tags = SchemaType.ClassType(
+                    "kotlin.collections.Map",
+                    listOf(io.flinkt.schema.SchemaTypeArgument.invariant(type("kotlin.String")), io.flinkt.schema.SchemaTypeArgument.invariant(type("kotlin.Long"))),
+                )
+                registry.register(
+                    User::class,
+                    RecordSchema(
+                        "com.example.User",
+                        listOf(FieldSchema("id", type("kotlin.Long")), FieldSchema("name", type("kotlin.String")), FieldSchema("tags", tags)),
+                    ),
+                    CodecFactory { UserCodec },
+                )
+            }
+        }
+
+        class Samples : () -> List<Any> {
+            override fun invoke(): List<Any> = listOf(User(1, "Ada", mapOf("a" to 1L, "b" to 2L)), User(2, "Grace", emptyMap()))
+        }
+    """
+
     /** `Key(a: Int, b: Int)`, with an `init` block that checks both arguments. */
     val KEY_AB = key("val a: Int, val b: Int", "Key(a = a, b = b)", "Key(1, 2)", "arguments[0] as Int, arguments[1] as Int")
 

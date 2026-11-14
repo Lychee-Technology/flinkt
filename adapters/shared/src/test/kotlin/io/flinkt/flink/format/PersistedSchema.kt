@@ -271,6 +271,11 @@ class PersistedSchema private constructor(
         }
     }
 
+    /**
+     * Each part's diagnostic, such as "a field name of com.example.User", is a lambda called only when the part fails.
+     * Built eagerly, it would copy the declaration's name, up to [MAX_NAME_LENGTH] chars, once per field, constant or
+     * type parameter, which would make reading cost the size of the snapshot times the length of a name.
+     */
     private class Reader(private val input: BudgetedInput) {
         fun readSchema(): PersistedSchema {
             val recordFormatVersion = input.readInt()
@@ -282,7 +287,7 @@ class PersistedSchema private constructor(
                 ?: throw MalformedDataException("the serialized type is a type parameter")
             val declarations = LinkedHashMap<String, DeclarationSchema>()
             var previous: String? = null
-            repeat(readCount("declarations")) {
+            repeat(readCount { "declarations" }) {
                 val declaration = readDeclaration()
                 val name = declaration.typeName
                 if (previous != null && previous!! >= name) {
@@ -291,17 +296,17 @@ class PersistedSchema private constructor(
                 previous = name
                 declarations[name] = declaration
             }
-            readAttributes("the snapshot")
+            readAttributes { "the snapshot" }
             return PersistedSchema(recordFormatVersion, role, root, declarations)
         }
 
         private fun readDeclaration(): DeclarationSchema {
             val kind = input.readUnsignedByte()
-            val name = readName("a declaration name")
+            val name = readName { "a declaration name" }
             val declaration = when (kind) {
                 RECORD -> {
                     val typeParameters = readNames(name)
-                    val fields = readList("fields of $name") { readField(name) }
+                    val fields = readList({ "fields of $name" }) { readField(name) }
                     RecordSchema(name, fields, typeParameters)
                 }
                 VALUE_CLASS -> {
@@ -310,20 +315,20 @@ class PersistedSchema private constructor(
                 }
                 ENUM -> {
                     var previousId = 0
-                    val constants = readList("constants of $name") {
+                    val constants = readList({ "constants of $name" }) {
                         val id = input.readInt()
                         if (id <= previousId) {
                             throw MalformedDataException("$name: constant ID $id follows $previousId: IDs are positive and ascending")
                         }
                         previousId = id
-                        EnumConstantSchema(readName("a constant of $name"), id)
+                        EnumConstantSchema(readName { "a constant of $name" }, id)
                     }
                     EnumSchema(name, constants)
                 }
                 SEALED -> {
                     val typeParameters = readNames(name)
                     var previousId = 0
-                    val subtypes = readList("subtypes of $name") {
+                    val subtypes = readList({ "subtypes of $name" }) {
                         val id = input.readInt()
                         if (id <= previousId) {
                             throw MalformedDataException("$name: subtype ID $id follows $previousId: IDs are positive and ascending")
@@ -340,14 +345,14 @@ class PersistedSchema private constructor(
                     "$name has declaration kind $kind, which snapshot format version $SNAPSHOT_FORMAT_VERSION doesn't define",
                 )
             }
-            readAttributes(name)
+            readAttributes { name }
             return declaration
         }
 
         private fun readField(declaration: String): FieldSchema {
-            val name = readName("a field name of $declaration")
+            val name = readName { "a field name of $declaration" }
             val field = FieldSchema(name, readType(depth = 1))
-            readAttributes("$declaration.$name")
+            readAttributes { "$declaration.$name" }
             return field
         }
 
@@ -355,9 +360,9 @@ class PersistedSchema private constructor(
             if (depth > MAX_DEPTH) throw MalformedDataException("a type nests deeper than $MAX_DEPTH levels")
             return when (val kind = input.readUnsignedByte()) {
                 CLASS_TYPE -> {
-                    val name = readName("a type name")
+                    val name = readName { "a type name" }
                     val nullable = RecordFormat.readBoolean(input)
-                    val arguments = readList("type arguments of $name") {
+                    val arguments = readList({ "type arguments of $name" }) {
                         when (val variance = input.readUnsignedByte()) {
                             STAR -> SchemaTypeArgument.STAR
                             INVARIANT, IN, OUT -> SchemaTypeArgument(variance(variance), readType(depth + 1))
@@ -366,7 +371,7 @@ class PersistedSchema private constructor(
                     }
                     SchemaType.ClassType(name, arguments, nullable)
                 }
-                TYPE_PARAMETER -> SchemaType.TypeParameter(readName("a type parameter"), RecordFormat.readBoolean(input))
+                TYPE_PARAMETER -> SchemaType.TypeParameter(readName { "a type parameter" }, RecordFormat.readBoolean(input))
                 else -> throw MalformedDataException(
                     "type kind $kind, which snapshot format version $SNAPSHOT_FORMAT_VERSION doesn't define",
                 )
@@ -374,48 +379,48 @@ class PersistedSchema private constructor(
         }
 
         private fun readNames(declaration: String): List<String> =
-            readList("type parameters of $declaration") { readName("a type parameter of $declaration") }
+            readList({ "type parameters of $declaration" }) { readName { "a type parameter of $declaration" } }
 
         // A name over its budget fails at its length, before a char is read.
-        private fun readName(what: String): String {
+        private inline fun readName(what: () -> String): String {
             val name = RecordFormat.readString(input, MAX_NAME_LENGTH, what)
-            if (name.isEmpty()) throw MalformedDataException("$what is empty")
+            if (name.isEmpty()) throw MalformedDataException("${what()} is empty")
             return name
         }
 
         // Nothing is allocated from a count: each element is read before it's added, and each takes at least one
         // byte, so the size budget bounds every list.
-        private fun readCount(what: String): Int {
+        private inline fun readCount(what: () -> String): Int {
             val count = input.readInt()
-            if (count < 0) throw MalformedDataException("$what: a count of $count")
+            if (count < 0) throw MalformedDataException("${what()}: a count of $count")
             if (count > input.remaining) {
-                throw MalformedDataException("$what: a count of $count can't fit in the ${input.remaining} bytes left of the budget")
+                throw MalformedDataException("${what()}: a count of $count can't fit in the ${input.remaining} bytes left of the budget")
             }
             return count
         }
 
-        private inline fun <T> readList(what: String, element: () -> T): List<T> {
+        private inline fun <T> readList(what: () -> String, element: () -> T): List<T> {
             val count = readCount(what)
             val list = ArrayList<T>(minOf(count, 16))
             repeat(count) { list += element() }
             return list
         }
 
-        private fun readAttributes(owner: String) {
+        private inline fun readAttributes(owner: () -> String) {
             var previousTag = 0
-            repeat(readCount("attributes of $owner")) {
+            repeat(readCount { "attributes of ${owner()}" }) {
                 val tag = input.readInt()
                 if (tag <= previousTag) {
-                    throw MalformedDataException("$owner: attribute $tag follows $previousTag: tags are positive and ascending")
+                    throw MalformedDataException("${owner()}: attribute $tag follows $previousTag: tags are positive and ascending")
                 }
                 previousTag = tag
                 val critical = RecordFormat.readBoolean(input)
-                val length = readCount("attribute $tag of $owner")
+                val length = readCount { "attribute $tag of ${owner()}" }
                 // This release knows no attribute. A non-critical one is information an older reader may ignore, and
                 // a critical one changes how the snapshot must be read, so an older reader fails on it.
                 if (critical) {
                     throw MalformedDataException(
-                        "$owner has critical attribute $tag, which this reader of snapshot format version " +
+                        "${owner()} has critical attribute $tag, which this reader of snapshot format version " +
                             "$SNAPSHOT_FORMAT_VERSION doesn't know",
                     )
                 }
@@ -673,36 +678,6 @@ class PersistedSchema private constructor(
 
         override fun readUTF(): String = throw UnsupportedOperationException()
     }
-}
-
-/** Substitutes [arguments] for the type parameters in [type]. */
-internal fun substitute(type: SchemaType.ClassType, arguments: Map<String, SchemaType>): SchemaType.ClassType =
-    if (arguments.isEmpty()) {
-        type
-    } else {
-        SchemaType.ClassType(
-            type.name,
-            type.arguments.map { argument ->
-                when (val argumentType = argument.type) {
-                    null -> argument
-                    else -> SchemaTypeArgument(argument.variance, substituteType(argumentType, arguments))
-                }
-            },
-            type.isNullable,
-        )
-    }
-
-internal fun substituteType(type: SchemaType, arguments: Map<String, SchemaType>): SchemaType = when (type) {
-    is SchemaType.ClassType -> substitute(type, arguments)
-    is SchemaType.TypeParameter -> {
-        val argument = arguments[type.name] ?: type
-        if (type.isNullable) nullable(argument) else argument
-    }
-}
-
-private fun nullable(type: SchemaType): SchemaType = when (type) {
-    is SchemaType.ClassType -> SchemaType.ClassType(type.name, type.arguments, isNullable = true)
-    is SchemaType.TypeParameter -> SchemaType.TypeParameter(type.name, isNullable = true)
 }
 
 /** No such nesting: a type parameter has no constant part, and a body may not use a type parameter. */

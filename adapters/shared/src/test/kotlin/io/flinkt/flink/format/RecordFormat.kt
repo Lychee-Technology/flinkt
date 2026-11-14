@@ -144,24 +144,30 @@ object RecordFormat {
      */
     @JvmStatic
     @JvmOverloads
-    fun readString(input: DataInput, maxLength: Int = MAX_STRING_LENGTH, what: String = "a string"): String {
-        val length = readStringLength(input, maxLength, what)
-        var chars = CharArray(minOf(length, STRING_CHUNK))
-        for (i in 0 until length) {
-            if (i == chars.size) chars = chars.copyOf(minOf(length, chars.size * 2))
-            chars[i] = readVarint(input, MAX_CHAR_BYTES, Char.MAX_VALUE.code.toLong(), "a char").toInt().toChar()
-        }
-        return String(chars)
+    fun readString(input: DataInput, maxLength: Int = MAX_STRING_LENGTH, what: String = "a string"): String =
+        readString(input, maxLength) { what }
+
+    /**
+     * [readString], with [what] called only to name a string over its budget. A reader that names each string by
+     * where it is, such as a field of a declaration, then builds no name for the strings that pass.
+     */
+    inline fun readString(input: DataInput, maxLength: Int, what: () -> String): String {
+        val length = readStringLength(input)
+        if (length > maxLength) throw stringOverBudget(what(), length, maxLength)
+        return readChars(input, length)
     }
 
     /** Consumes a string [writeString] wrote, with the checks of [readString], and allocates nothing. */
     @JvmStatic
     fun skipString(input: DataInput) {
-        val length = readStringLength(input, MAX_STRING_LENGTH, "a string")
+        val length = readStringLength(input)
+        if (length > MAX_STRING_LENGTH) throw stringOverBudget("a string", length, MAX_STRING_LENGTH)
         for (i in 0 until length) readVarint(input, MAX_CHAR_BYTES, Char.MAX_VALUE.code.toLong(), "a char")
     }
 
-    private fun readStringLength(input: DataInput, maxLength: Int, what: String): Int {
+    /** A string's length, which the caller checks against its budget before it reads a char. */
+    @PublishedApi
+    internal fun readStringLength(input: DataInput): Int {
         val lengthPlusOne = readVarint(input, MAX_LENGTH_BYTES, Int.MAX_VALUE.toLong(), "a string length").toInt()
         if (lengthPlusOne == 0) {
             throw MalformedDataException(
@@ -169,9 +175,22 @@ object RecordFormat {
                     "and Flinkt writes null in a null bitmap or a null marker",
             )
         }
-        val length = lengthPlusOne - 1
-        if (length > maxLength) throw MalformedDataException("$what is $length chars long, over the budget of $maxLength")
-        return length
+        return lengthPlusOne - 1
+    }
+
+    @PublishedApi
+    internal fun stringOverBudget(what: String, length: Int, maxLength: Int): MalformedDataException =
+        MalformedDataException("$what is $length chars long, over the budget of $maxLength")
+
+    /** The [length] chars of a string whose length was read and checked. */
+    @PublishedApi
+    internal fun readChars(input: DataInput, length: Int): String {
+        var chars = CharArray(minOf(length, STRING_CHUNK))
+        for (i in 0 until length) {
+            if (i == chars.size) chars = chars.copyOf(minOf(length, chars.size * 2))
+            chars[i] = readVarint(input, MAX_CHAR_BYTES, Char.MAX_VALUE.code.toLong(), "a char").toInt().toChar()
+        }
+        return String(chars)
     }
 
     private const val MAX_CHAR_BYTES = 3

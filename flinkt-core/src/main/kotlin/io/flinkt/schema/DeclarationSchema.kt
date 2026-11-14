@@ -37,9 +37,9 @@ public class RecordSchema(
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
-        validate(typeName, this.typeParameters)
+        val declared = validate(typeName, this.typeParameters)
         requireUnique(this.fields.map { it.name }) { "$typeName has two fields named $it" }
-        this.fields.forEach { requireDeclared(typeName, this.typeParameters, it.type) }
+        this.fields.forEach { requireDeclared(typeName, declared, it.type) }
     }
 
     override fun equals(other: Any?): Boolean =
@@ -83,8 +83,7 @@ public class ValueClassSchema(
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
-        validate(typeName, this.typeParameters)
-        requireDeclared(typeName, this.typeParameters, underlying.type)
+        requireDeclared(typeName, validate(typeName, this.typeParameters), underlying.type)
     }
 
     override fun equals(other: Any?): Boolean =
@@ -154,10 +153,10 @@ public class SealedSchema(
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
-        validate(typeName, this.typeParameters)
+        val declared = validate(typeName, this.typeParameters)
         requireUnique(this.subtypes.map { it.type.name }) { "$typeName lists the subtype $it twice" }
         requireUnique(this.subtypes.map { it.id }) { "$typeName has two subtypes with ID $it" }
-        this.subtypes.forEach { requireDeclared(typeName, this.typeParameters, it.type) }
+        this.subtypes.forEach { requireDeclared(typeName, declared, it.type) }
     }
 
     override fun equals(other: Any?): Boolean =
@@ -210,19 +209,26 @@ public class ObjectSchema(
     override fun toString(): String = "object $typeName"
 }
 
-private fun validate(typeName: String, typeParameters: List<String>) {
+/** Checks a declaration's name and type parameters, and returns the type parameters as a set, for [requireDeclared]. */
+private fun validate(typeName: String, typeParameters: List<String>): Set<String> {
     require(typeName.isNotEmpty()) { "A declaration needs a type name" }
     require(typeParameters.none { it.isEmpty() }) { "A type parameter of $typeName has no name" }
-    requireUnique(typeParameters) { "$typeName has two type parameters named $it" }
+    return requireUnique(typeParameters) { "$typeName has two type parameters named $it" }
 }
 
-private inline fun <T> requireUnique(values: List<T>, message: (T) -> String) {
+/** Requires [values] to be distinct, and returns them as a set. */
+private inline fun <T> requireUnique(values: List<T>, message: (T) -> String): Set<T> {
     val seen = HashSet<T>()
     for (value in values) require(seen.add(value)) { message(value) }
+    return seen
 }
 
-/** Every type parameter that [type] refers to is one of [typeParameters]. */
-private fun requireDeclared(typeName: String, typeParameters: List<String>, type: SchemaType?) {
+/**
+ * Every type parameter that [type] refers to is one of [typeParameters]. They're a set, so a reference costs the same
+ * however many type parameters the declaration has: a snapshot reader builds a schema from data it hasn't checked yet,
+ * and a declaration with `P` type parameters and `F` fields that use them mustn't cost `P * F`.
+ */
+private fun requireDeclared(typeName: String, typeParameters: Set<String>, type: SchemaType?) {
     when (type) {
         null -> Unit
         is SchemaType.TypeParameter ->

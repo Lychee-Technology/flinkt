@@ -97,6 +97,25 @@ class RestorePrototypeTest {
     }
 
     @Test
+    fun `a removed map that holds a key twice fails the read, as its codec does`() {
+        val oldLoader = Declarations.load(Declarations.USER_WITH_TAGS)
+        val old = OldState.write(oldLoader, "com.example.User")
+        val restored = old.readSnapshot(user).restore(setOf(Operation.REMOVE_FIELD))
+        assertEquals(listOf("User(id=1, name=Ada)", "User(id=2, name=Grace)"), old.readAll(restored))
+
+        // The first record's second key, "b", made "a". Before it: the id (8 bytes), the name (04 41 64 61), the
+        // map's size (4 bytes), the key "a" (02 61) and its Long (8 bytes), then the key's length.
+        val corrupt = old.bytes.copyOf().also {
+            assertEquals(0x62, it[27].toInt())
+            it[27] = 0x61
+        }
+        val codec = assertThrows<MalformedDataException> { codec(oldLoader, "com.example.User").deserialize(DataInputDeserializer(corrupt)) }
+        assertEquals("a map holds the key a twice", codec.message)
+        val e = assertThrows<MalformedDataException> { restored.deserialize(DataInputDeserializer(corrupt)) }
+        assertEquals("a map holds the key written as 02 61 twice", e.message)
+    }
+
+    @Test
     fun `a constructor reorder restores as-is in a value, and fails in a partition key`() {
         val oldLoader = Declarations.load(Declarations.KEY_AB)
         val reordered = Declarations.load(Declarations.KEY_BA)

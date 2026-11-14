@@ -6,9 +6,11 @@ import io.flinkt.example.User
 import io.flinkt.example.listOfNullableUsers
 import io.flinkt.example.userSchema
 import io.flinkt.registry.TypeRegistry
+import java.time.Duration
 import kotlin.reflect.KVariance
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -64,6 +66,24 @@ class SchemaTest {
         }
         assertMessage("com.example.Box has two type parameters named T") {
             ValueClassSchema("com.example.Box", FieldSchema("value", SchemaType.TypeParameter("T")), listOf("T", "T"))
+        }
+    }
+
+    @Test
+    fun `a wide generic declaration is checked in linear time`() {
+        // 300,000 type parameters, and 300,000 uses of the last one: a check that searched the list on each use would
+        // make about 9 * 10^10 comparisons, and a snapshot reader builds these schemas from data it hasn't checked.
+        val count = 300_000
+        val parameters = List(count) { "T$it" }
+        val last = SchemaType.TypeParameter(parameters.last())
+        val wide = SchemaType.ClassType("com.example.Wide", List(count) { SchemaTypeArgument.invariant(last) })
+        assertTimeoutPreemptively(Duration.ofSeconds(60)) {
+            assertEquals(count, RecordSchema("com.example.Wide", List(count) { FieldSchema("f$it", last) }, parameters).fields.size)
+            ValueClassSchema("com.example.WideValue", FieldSchema("value", wide), parameters)
+            SealedSchema("com.example.WideEvent", listOf(SealedSubtypeSchema(1, wide)), parameters)
+        }
+        assertMessage("com.example.Wide refers to a type parameter U it doesn't declare") {
+            RecordSchema("com.example.Wide", listOf(FieldSchema("f", SchemaType.TypeParameter("U"))), parameters)
         }
     }
 

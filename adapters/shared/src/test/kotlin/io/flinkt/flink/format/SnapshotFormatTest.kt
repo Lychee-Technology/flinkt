@@ -144,6 +144,58 @@ class SnapshotFormatTest {
     }
 
     @Test
+    fun `the schema-driven reader fails on a map that holds a key twice, comparing keys by their bytes`() {
+        // Map<String, Long> with the key "a" twice: the codec's reader and the walker reject the same bytes.
+        val strings = map(type("kotlin.String"), type("kotlin.Long"))
+        val distinct = bytes("00 00 00 02 | 02 61 | 00 00 00 00 00 00 00 01 | 02 62 | 00 00 00 00 00 00 00 02")
+        val twice = bytes("00 00 00 02 | 02 61 | 00 00 00 00 00 00 00 01 | 02 61 | 00 00 00 00 00 00 00 02")
+        fun codec(bytes: ByteArray) = RecordFormat.readMap(DataInputDeserializer(bytes), { RecordFormat.readString(it) }, RecordFormat::readLong)
+        val walker = SchemaWalker(PersistedSchema.of(strings) { null })
+        assertEquals(mapOf("a" to 1L, "b" to 2L), codec(distinct))
+        DataInputDeserializer(distinct).also { walker.skipValue(strings, it) }.also { assertEquals(0, it.available()) }
+        assertEquals("a map holds the key a twice", assertThrows<MalformedDataException> { codec(twice) }.message)
+        val e = assertThrows<MalformedDataException> { walker.skipValue(strings, DataInputDeserializer(twice)) }
+        assertEquals("a map holds the key written as 02 61 twice", e.message)
+
+        // Map<Key<Int>?, Map<String, Long>>, with Key<T>(a: T, b: String?, color: Color): a null key, keys with a
+        // bitmap, a type argument and an enum, and inner maps, each with keys of its own.
+        val declarations = mapOf(
+            "com.example.Key" to RecordSchema(
+                "com.example.Key",
+                listOf(FieldSchema("a", SchemaType.TypeParameter("T")), field("b", "kotlin.String").nullable(), field("color", "com.example.Color")),
+                listOf("T"),
+            ),
+            "com.example.Color" to EnumSchema("com.example.Color", colors),
+        )
+        val keyOfInt = SchemaType.ClassType("com.example.Key", listOf(SchemaTypeArgument.invariant(type("kotlin.Int"))), isNullable = true)
+        val root = map(keyOfInt, map(type("kotlin.String"), type("kotlin.Long")))
+        val keys = SchemaWalker(PersistedSchema.of(root) { declarations[it] })
+        val nullKey = byteArrayOf(0)
+        // Canonical order: a, b, color. b is the bitmap's only bit.
+        fun key(a: Int, b: String?, color: Int) = Bytes.of {
+            writeByte(1); writeByte(if (b == null) 1 else 0); writeInt(a); b?.let { string(it) }; writeInt(color)
+        }
+        fun inner(vararg entries: Pair<String, Long>) = Bytes.of { writeInt(entries.size); for ((k, v) in entries) { string(k); writeLong(v) } }
+        fun outer(vararg entries: Pair<ByteArray, ByteArray>) = Bytes.of { writeInt(entries.size); for ((k, v) in entries) { write(k); write(v) } }
+        fun walk(bytes: ByteArray) = DataInputDeserializer(bytes).also { keys.skipValue(root, it) }.also { assertEquals(0, it.available()) }
+        fun fails(bytes: ByteArray, key: String) {
+            assertEquals("a map holds the key written as $key twice", assertThrows<MalformedDataException>(key) { walk(bytes) }.message)
+        }
+        walk(outer(nullKey to inner("a" to 1), key(1, null, 1) to inner("a" to 2), key(1, "x", 1) to inner(), key(1, null, 2) to inner()))
+        fails(outer(nullKey to inner(), key(1, null, 1) to inner(), nullKey to inner()), "00")
+        fails(outer(key(1, null, 1) to inner(), key(1, "x", 1) to inner(), key(1, null, 1) to inner()), "01 01 00 00 00 01 00 00 00 01")
+        fails(outer(key(1, "x", 1) to inner("a" to 1, "b" to 2, "a" to 3)), "02 61")
+
+        // No key type holds a collection, so no release wrote one, and two equal maps in keys could differ in bytes.
+        val holder = mapOf("com.example.Holder" to RecordSchema("com.example.Holder", listOf(FieldSchema("values", map(type("kotlin.String"), type("kotlin.Long"))))))
+        val holders = map(type("com.example.Holder"), type("kotlin.Long"))
+        val collection = assertThrows<MalformedDataException> {
+            SchemaWalker(PersistedSchema.of(holders) { holder[it] }).skipValue(holders, DataInputDeserializer(bytes("00 00 00 01 | 00 00 00 00")))
+        }
+        assertEquals("a map key holds a kotlin.collections.Map, and no key type holds a collection, so no release wrote it", collection.message)
+    }
+
+    @Test
     fun `the reader rejects malformed snapshots, naming what's wrong`() {
         fun fails(bytes: ByteArray, message: String) {
             val e = assertThrows<MalformedDataException> { PersistedSchema.read(DataInputDeserializer(bytes)) }
@@ -322,6 +374,61 @@ class SnapshotFormatTest {
     }
 
     @Test
+    fun `a wide generic declaration is read and checked in linear time`() {
+        // Wide<T0, ..., Tn>(f0: Tn, ..., fn: Tn), and a sealed type and a value class with the same type parameters,
+        // whose subtype and underlying type are Wide<Tn, ..., Tn>: 8 MB. Checking each use of Tn against the list of
+        // type parameters would take 3 * 150,000^2 comparisons, minutes, before the root's arity fails.
+        val count = 150_000
+        val parameters = Bytes.of { writeInt(count); repeat(count) { string("T" + it.toString(36)) } }
+        val last = Bytes.of { writeByte(2); string("T" + (count - 1).toString(36)); writeByte(0) }
+        val wideOfLast = Bytes.of {
+            writeByte(1); string("com.example.Wide"); writeByte(0); writeInt(count)
+            repeat(count) { writeByte(1); write(last) }
+        }
+        val snapshot = Bytes.snapshot(
+            Bytes.type("com.example.Wide"),
+            Bytes.of {
+                writeByte(1); string("com.example.Wide"); write(parameters)
+                writeInt(count); repeat(count) { string("f" + it.toString(36)); write(last); writeInt(0) }
+                writeInt(0)
+            },
+            Bytes.of { writeByte(4); string("com.example.WideEvent"); write(parameters); writeInt(1); writeInt(1); write(wideOfLast); writeInt(0) },
+            Bytes.of { writeByte(2); string("com.example.WideValue"); write(parameters); string("value"); write(wideOfLast); writeInt(0); writeInt(0) },
+        )
+        assertTrue(snapshot.size < PersistedSchema.MAX_SNAPSHOT_BYTES, "${snapshot.size} bytes")
+
+        assertTimeoutPreemptively(Duration.ofSeconds(60)) {
+            val e = assertThrows<MalformedDataException> { PersistedSchema.read(DataInputDeserializer(snapshot)) }
+            assertEquals("the snapshot holds an invalid schema: com.example.Wide has 0 type arguments, and com.example.Wide takes $count", e.message)
+        }
+    }
+
+    @Test
+    fun `a declaration's name costs nothing per field, constant or type parameter`() {
+        // Two names of the budget's length, with 100,000 type parameters, fields and constants. A reader that named
+        // each part as it read it, as in "a field name of <the declaration>", would copy 65,535 chars each time:
+        // tens of gigabytes for a 4 MB snapshot.
+        val count = 100_000
+        fun long(name: String) = name + "x".repeat(PersistedSchema.MAX_NAME_LENGTH - name.length)
+        val color = long("com.example.Color")
+        val record = long("com.example.Record")
+        val snapshot = Bytes.snapshot(
+            Bytes.type(record),
+            Bytes.of { writeByte(3); string(color); writeInt(count); repeat(count) { writeInt(it + 1); string("C" + it.toString(36)) }; writeInt(0) },
+            Bytes.of {
+                writeByte(1); string(record)
+                writeInt(count); repeat(count) { string("T" + it.toString(36)) }
+                writeInt(count); repeat(count) { string("f" + it.toString(36)); write(Bytes.type("kotlin.Long")); writeInt(0) }
+                writeInt(0)
+            },
+        )
+        lateinit var e: MalformedDataException
+        val allocated = allocatedBy { e = assertThrows<MalformedDataException> { PersistedSchema.read(DataInputDeserializer(snapshot)) } }
+        assertEquals("the snapshot holds an invalid schema: $record has 0 type arguments, and $record takes $count", e.message)
+        assertTrue(allocated < 64L * snapshot.size, "reading ${snapshot.size} bytes allocated $allocated")
+    }
+
+    @Test
     fun `truncated data fails as the end of the input`() {
         val schema = PersistedSchema.of(type("com.example.User")) { mapOf("com.example.User" to userSchema)[it] }
         for (length in 0 until schema.encoded.size) {
@@ -375,6 +482,13 @@ class SnapshotFormatTest {
         fun type(name: String, nullable: Boolean = false) = SchemaType.ClassType(name, isNullable = nullable)
 
         fun field(name: String, type: String) = FieldSchema(name, type(type))
+
+        fun FieldSchema.nullable() = FieldSchema(name, SchemaType.ClassType((type as SchemaType.ClassType).name, isNullable = true))
+
+        fun map(key: SchemaType, value: SchemaType) = SchemaType.ClassType(
+            "kotlin.collections.Map",
+            listOf(SchemaTypeArgument.invariant(key), SchemaTypeArgument.invariant(value)),
+        )
 
         /** The decision's example: `User(id: Long, name: String)`'s snapshot data, in the value role. */
         val USER_SNAPSHOT = """

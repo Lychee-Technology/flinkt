@@ -5,14 +5,18 @@ import io.flinkt.registry.Resolution
 import io.flinkt.registry.TypeRegistry
 import io.flinkt.schema.DeclarationSchema
 import io.flinkt.schema.EnumSchema
+import io.flinkt.schema.FieldSchema
 import io.flinkt.schema.ObjectSchema
 import io.flinkt.schema.RecordSchema
 import io.flinkt.schema.SchemaType
+import io.flinkt.schema.SchemaTypeArgument
 import io.flinkt.schema.SealedSchema
 import io.flinkt.schema.ValueClassSchema
 import io.flinkt.types.UnsupportedTypeException
 import java.io.DataInput
 import java.io.IOException
+import java.util.Arrays
+import java.util.TreeSet
 import org.apache.flink.api.common.typeutils.TypeSerializer
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot
@@ -303,22 +307,26 @@ class OldLayoutSerializer<T>(
     private val constructor = current.codec as? MigrationConstructor<T>
         ?: throw IncompatibleStateException("${old.root}'s codec has no migration constructor")
     private val walker = SchemaWalker(old)
-    private val keptReaders: Map<String, (DataInput) -> Any?> = canonicalFields
-        .filter { plan.operations[it.name] == FieldOperation.KEEP }
-        .associate { it.name to reader(it.type as SchemaType.ClassType) }
+
+    // Per old field, in canonical order, decided once: how it's read, and for a kept one, its constructor parameter.
+    private val readers: List<((DataInput) -> Any?)?> = canonicalFields.map { field ->
+        when (plan.operations.getValue(field.name)) {
+            FieldOperation.KEEP -> reader(field.type as SchemaType.ClassType)
+            FieldOperation.REMOVE -> null
+        }
+    }
+    private val parameters = IntArray(canonicalFields.size) { constructor.parameterNames.indexOf(canonicalFields[it].name) }
 
     override fun deserialize(source: DataInputView): T {
         val nulls = RecordFormat.readNullBitmap(source, nullableFields)
         val arguments = arrayOfNulls<Any?>(constructor.parameterNames.size)
         var nullable = 0
-        for (field in canonicalFields) {
+        for ((i, field) in canonicalFields.withIndex()) {
             val present = !field.type.isNullable || !nulls[nullable++]
-            when (plan.operations.getValue(field.name)) {
-                FieldOperation.KEEP ->
-                    arguments[constructor.parameterNames.indexOf(field.name)] =
-                        if (present) keptReaders.getValue(field.name)(source) else null
-                FieldOperation.REMOVE ->
-                    if (present) walker.skipField(field.type, emptyMap(), source, "${oldRecord.typeName}.${field.name}")
+            val read = readers[i]
+            when {
+                read != null -> arguments[parameters[i]] = if (present) read(source) else null
+                present -> walker.skipField(old.root, field, source)
             }
         }
         return constructor.construct(arguments)
@@ -379,82 +387,269 @@ fun readBuiltIn(name: String, input: DataInput): Any = when (name) {
 /**
  * Consumes values by walking their schema, without their classes: what a migration does with a removed value. It
  * reads every byte with the checks the codecs make, and the same budgets, so a malformed value fails here as it would
- * in a codec.
+ * in a codec, a `Map` that holds a key twice included.
  *
- * Its work is bounded by the schema's validation (docs/persisted-format.md, "Resource limits"): it recurses at most
- * [PersistedSchema.MAX_DEPTH] levels, a collection's size is within its budget, and every value but the root's and a
- * sealed subtype's takes at least one byte, so each turn of a loop over a collection consumes input. It allocates
- * nothing for the values it skips.
+ * Its work is linear in the bytes it consumes, but for a map's keys, each of which costs at most `log2` of the map's
+ * size in comparisons (docs/persisted-format.md, "Resource limits"). It recurses at most [PersistedSchema.MAX_DEPTH]
+ * levels, a collection's size is within its budget, and every value but the root's and a sealed subtype's takes at
+ * least one byte, so each turn of a loop over a collection consumes input. Each declaration is prepared once, the
+ * first time a value of it is read, so no value costs work for its schema's width: a type argument is looked up in
+ * the scope it was written in, never substituted, and an enum or sealed ID is found by binary search. The only thing
+ * it keeps for a value it consumes is a map's keys' bytes, until the map ends.
  */
 class SchemaWalker(private val schema: PersistedSchema) {
+    private val prepared = HashMap<String, Prepared>()
+
     /** Consumes a value of [type], a type with no type parameter, outside a record field: nullable means a marker. */
-    fun skipValue(type: SchemaType.ClassType, input: DataInput) {
-        if (!type.isNullable || RecordFormat.readNullMarker(input)) skipPresent(type, input)
+    fun skipValue(type: SchemaType.ClassType, input: DataInput) = skipValue(type, null, input, inKey = false)
+
+    /** Consumes the value of [field], a present field of [owner], which is a record type with no type parameter. */
+    fun skipField(owner: SchemaType.ClassType, field: FieldSchema, input: DataInput) =
+        skipField(field, owner.name, scope(prepare(owner.name), owner, null), input, inKey = false)
+
+    /** Consumes a value of [type], used in [scope]. A nullable type, or a nullable argument, means a marker. */
+    private fun skipValue(type: SchemaType, scope: Scope?, input: DataInput, inKey: Boolean) =
+        resolve(type, scope) { classType, where, nullableArgument ->
+            if (!(type.isNullable || nullableArgument) || RecordFormat.readNullMarker(input)) {
+                skipPresent(classType, where, input, inKey)
+            }
+        }
+
+    /**
+     * Consumes the value of a present [field] of [owner], whose type arguments are [scope]'s. The field's own `?` is
+     * the record's null bitmap. A field declared as a type parameter is written by its argument's codec, so a nullable
+     * argument has its marker. When the field is declared `T?`, its clear bitmap bit already says it holds a value, so
+     * that marker is `01`: `00` would be a second encoding of null.
+     */
+    private fun skipField(field: FieldSchema, owner: String, scope: Scope?, input: DataInput, inKey: Boolean) {
+        when (val type = field.type) {
+            is SchemaType.TypeParameter -> resolve(type, scope) { argument, where, nullableArgument ->
+                if (type.isNullable && nullableArgument) {
+                    if (!RecordFormat.readNullMarker(input)) throw RecordFormat.nullInPresentField("$owner.${field.name}")
+                    skipPresent(argument, where, input, inKey)
+                } else if (!nullableArgument || RecordFormat.readNullMarker(input)) {
+                    skipPresent(argument, where, input, inKey)
+                }
+            }
+            is SchemaType.ClassType -> skipPresent(type, scope, input, inKey)
+        }
+    }
+
+    /** Consumes a present value of [type], whose type parameters are [scope]'s. [inKey] is set inside a map key. */
+    private fun skipPresent(type: SchemaType.ClassType, scope: Scope?, input: DataInput, inKey: Boolean) {
+        when (type.name) {
+            "kotlin.String" -> RecordFormat.skipString(input)
+            in PersistedSchema.BUILT_INS -> skipBuiltIn(type.name, input)
+            LIST -> {
+                if (inKey) throw collectionInKey(type)
+                val element = type.arguments[0].type!!
+                repeat(RecordFormat.readCollectionSize(input)) { skipValue(element, scope, input, inKey = false) }
+            }
+            MAP -> {
+                if (inKey) throw collectionInKey(type)
+                skipMap(type.arguments[0].type!!, type.arguments[1].type!!, scope, input)
+            }
+            else -> skipDeclared(prepare(type.name), type, scope, input, inKey)
+        }
     }
 
     /**
-     * Consumes the value of a present [field] whose declared type is [type], in a declaration whose type parameters
-     * are bound to [arguments]. The field's own `?` is the record's null bitmap. A field declared as a type parameter
-     * is written by its argument's codec, so a nullable argument has its marker. When the field is declared `T?`, its
-     * clear bitmap bit already says it holds a value, so that marker is `01`: `00` would be a second encoding of null.
+     * A map's entries, checking that no key is there twice without the key's class. A key's equality depends only on
+     * what's written (docs/architecture.md, "Map keys"), and each of its encodings is canonical, so two keys are
+     * equal exactly when their bytes are (docs/persisted-format.md, "Deterministic bytes").
+     *
+     * The map's keys' bytes are kept until it ends, in a set ordered by those bytes: at most the bytes they were read
+     * from, plus a constant per entry, as a codec's decoded map holds its keys. A key costs at most `log2(size)`
+     * comparisons, 26 at the size budget, each of at most its own bytes, whatever the keys are: no hash code that
+     * keys could be written to share.
      */
-    fun skipField(type: SchemaType, arguments: Map<String, SchemaType>, input: DataInput, field: String) {
-        when (type) {
-            is SchemaType.TypeParameter -> {
-                val argument = arguments.getValue(type.name) as SchemaType.ClassType
-                if (type.isNullable && argument.isNullable) {
-                    if (!RecordFormat.readNullMarker(input)) throw RecordFormat.nullInPresentField(field)
-                    skipPresent(argument, input)
-                } else {
-                    skipValue(argument, input)
-                }
-            }
-            is SchemaType.ClassType -> skipPresent(substitute(type, arguments), input)
+    private fun skipMap(key: SchemaType, value: SchemaType, scope: Scope?, input: DataInput) {
+        val size = RecordFormat.readCollectionSize(input)
+        if (size == 0) return
+        val recorder = KeyRecorder(input)
+        val keys = TreeSet(BYTE_ORDER)
+        repeat(size) {
+            recorder.start()
+            skipValue(key, scope, recorder, inKey = true)
+            val bytes = recorder.bytes()
+            if (!keys.add(bytes)) throw MalformedDataException("a map holds the key written as ${hexPrefix(bytes)} twice")
+            skipValue(value, scope, input, inKey = false)
         }
     }
 
-    private fun skipPresent(type: SchemaType.ClassType, input: DataInput) {
-        when (type.name) {
-            "kotlin.String" -> RecordFormat.skipString(input)
-            in PersistedSchema.BUILT_INS -> readBuiltIn(type.name, input)
-            "kotlin.collections.List" -> repeat(RecordFormat.readCollectionSize(input)) { skipValue(type.argument(0), input) }
-            "kotlin.collections.Map" -> repeat(RecordFormat.readCollectionSize(input)) {
-                skipValue(type.argument(0), input)
-                skipValue(type.argument(1), input)
-            }
-            else -> skipDeclared(schema.declaration(type.name), type, input)
-        }
-    }
-
-    private fun skipDeclared(declaration: DeclarationSchema, type: SchemaType.ClassType, input: DataInput) {
-        val arguments = declaration.typeParameters.zip(type.arguments.map { it.type!! }).toMap()
-        when (declaration) {
+    private fun skipDeclared(declaration: Prepared, type: SchemaType.ClassType, scope: Scope?, input: DataInput, inKey: Boolean) {
+        // The declaration's body is read in a scope of its own: its type parameters stand for type's arguments.
+        val body = scope(declaration, type, scope)
+        when (val schema = declaration.schema) {
             is RecordSchema -> {
-                val fields = declaration.fields.sortedBy { it.name }
-                val nulls = RecordFormat.readNullBitmap(input, fields.count { it.type.isNullable })
+                val nulls = RecordFormat.readNullBitmap(input, declaration.nullableFields)
                 var nullable = 0
-                for (field in fields) {
+                for (field in declaration.fields) {
                     val present = !field.type.isNullable || !nulls[nullable++]
-                    if (present) skipField(field.type, arguments, input, "${declaration.typeName}.${field.name}")
+                    if (present) skipField(field, schema.typeName, body, input, inKey)
                 }
             }
             is EnumSchema -> {
                 val id = input.readInt()
-                if (declaration.constants.none { it.id == id }) {
-                    throw MalformedDataException("${declaration.typeName} has no constant with ID $id")
+                if (Arrays.binarySearch(declaration.ids, id) < 0) {
+                    throw MalformedDataException("${schema.typeName} has no constant with ID $id")
                 }
             }
             is SealedSchema -> {
                 val id = input.readInt()
-                val subtype = declaration.subtypes.firstOrNull { it.id == id }
-                    ?: throw MalformedDataException("${declaration.typeName} has no subtype with ID $id")
-                skipPresent(substitute(subtype.type, arguments), input)
+                val index = Arrays.binarySearch(declaration.ids, id)
+                if (index < 0) throw MalformedDataException("${schema.typeName} has no subtype with ID $id")
+                skipPresent(declaration.subtypes[index], body, input, inKey)
             }
             is ObjectSchema -> Unit
             is ValueClassSchema -> throw UnsupportedOperationException("A value class's bytes are #18's decision")
         }
     }
 
-    private fun SchemaType.ClassType.argument(index: Int): SchemaType.ClassType =
-        arguments[index].type as SchemaType.ClassType
+    private fun prepare(name: String): Prepared = prepared.getOrPut(name) { Prepared(schema.declaration(name)) }
+
+    /** The scope [declaration]'s body is read in, for a value of [type], whose arguments are written in [outer]. */
+    private fun scope(declaration: Prepared, type: SchemaType.ClassType, outer: Scope?): Scope? =
+        if (declaration.parameters.isEmpty()) null else Scope(declaration, type.arguments, outer)
+
+    /**
+     * Calls [use] with the class type that [type], used in [scope], stands for, the scope that class type's own
+     * arguments are written in, and whether an argument on the way is nullable, as substituting it would make it. A
+     * type parameter's argument is written in the scope around the one that declares it, so a chain of them is
+     * followed outwards, one scope per step, never deeper than the nesting.
+     */
+    private inline fun <R> resolve(type: SchemaType, scope: Scope?, use: (SchemaType.ClassType, Scope?, Boolean) -> R): R {
+        var current = type
+        var where = scope
+        var nullable = false
+        while (current is SchemaType.TypeParameter) {
+            val declaring = checkNotNull(where) { "${current.name} is used outside a generic declaration" }
+            current = checkNotNull(declaring.arguments[declaring.declaration.parameters.getValue(current.name)].type)
+            where = declaring.outer
+            nullable = nullable || current.isNullable
+        }
+        return use(current as SchemaType.ClassType, where, nullable)
+    }
+
+    private fun skipBuiltIn(name: String, input: DataInput) {
+        when (name) {
+            "kotlin.Boolean" -> RecordFormat.readBoolean(input)
+            "kotlin.Byte" -> RecordFormat.readByte(input)
+            "kotlin.Short" -> RecordFormat.readShort(input)
+            "kotlin.Int" -> RecordFormat.readInt(input)
+            "kotlin.Long" -> RecordFormat.readLong(input)
+            "kotlin.Float" -> RecordFormat.readFloat(input)
+            "kotlin.Double" -> RecordFormat.readDouble(input)
+            "kotlin.Char" -> RecordFormat.readChar(input)
+            "kotlin.String" -> RecordFormat.skipString(input)
+            else -> throw IllegalArgumentException("$name isn't a built-in")
+        }
+    }
+
+    // No key type holds a collection (docs/architecture.md, "Map keys"), so no release wrote one, and a Map's bytes
+    // follow its iteration order, so two equal keys holding one could have different bytes.
+    private fun collectionInKey(type: SchemaType.ClassType) = MalformedDataException(
+        "a map key holds a ${type.name}, and no key type holds a collection, so no release wrote it",
+    )
+
+    /** A declaration of the old schema, prepared to read its values. */
+    private class Prepared(val schema: DeclarationSchema) {
+        /** Each type parameter's position. */
+        val parameters: Map<String, Int> = schema.typeParameters.withIndex().associate { (index, name) -> name to index }
+
+        /** A record's fields, in canonical order, and how many of them are nullable. */
+        val fields: List<FieldSchema> = (schema as? RecordSchema)?.fields.orEmpty().sortedBy { it.name }
+        val nullableFields: Int = fields.count { it.type.isNullable }
+
+        /** An enum's constant IDs, or a sealed type's subtype IDs, in ascending order, and the subtypes in that order. */
+        val ids: IntArray
+        val subtypes: List<SchemaType.ClassType>
+
+        init {
+            when (schema) {
+                is EnumSchema -> {
+                    ids = schema.constants.map { it.id }.sorted().toIntArray()
+                    subtypes = emptyList()
+                }
+                is SealedSchema -> {
+                    val sorted = schema.subtypes.sortedBy { it.id }
+                    ids = sorted.map { it.id }.toIntArray()
+                    subtypes = sorted.map { it.type }
+                }
+                else -> {
+                    ids = IntArray(0)
+                    subtypes = emptyList()
+                }
+            }
+        }
+    }
+
+    /** The arguments a generic declaration's value has: [arguments], written in [outer]. */
+    private class Scope(val declaration: Prepared, val arguments: List<SchemaTypeArgument>, val outer: Scope?)
+
+    /** A [DataInput] that keeps a copy of the bytes a map key is read from, so it can be compared without its class. */
+    private class KeyRecorder(private val input: DataInput) : DataInput {
+        private var bytes = ByteArray(16)
+        private var length = 0
+
+        fun start() {
+            length = 0
+        }
+
+        fun bytes(): ByteArray = bytes.copyOf(length)
+
+        private fun record(value: Long, count: Int) {
+            if (length + count > bytes.size) bytes = bytes.copyOf(maxOf(bytes.size * 2, length + count))
+            for (shift in count - 1 downTo 0) bytes[length++] = (value ushr (8 * shift)).toByte()
+        }
+
+        override fun readBoolean(): Boolean = readUnsignedByte() != 0
+
+        override fun readByte(): Byte = input.readByte().also { record(it.toLong(), 1) }
+
+        override fun readUnsignedByte(): Int = input.readUnsignedByte().also { record(it.toLong(), 1) }
+
+        override fun readShort(): Short = input.readShort().also { record(it.toLong(), 2) }
+
+        override fun readUnsignedShort(): Int = input.readUnsignedShort().also { record(it.toLong(), 2) }
+
+        override fun readChar(): Char = input.readChar().also { record(it.code.toLong(), 2) }
+
+        override fun readInt(): Int = input.readInt().also { record(it.toLong(), 4) }
+
+        override fun readLong(): Long = input.readLong().also { record(it, 8) }
+
+        override fun readFloat(): Float = java.lang.Float.intBitsToFloat(readInt())
+
+        override fun readDouble(): Double = java.lang.Double.longBitsToDouble(readLong())
+
+        override fun readFully(b: ByteArray) = readFully(b, 0, b.size)
+
+        override fun readFully(b: ByteArray, off: Int, len: Int) {
+            input.readFully(b, off, len)
+            for (i in off until off + len) record(b[i].toLong(), 1)
+        }
+
+        override fun skipBytes(n: Int): Int = throw UnsupportedOperationException("a key's bytes are read, to compare them")
+
+        override fun readLine(): String = throw UnsupportedOperationException()
+
+        override fun readUTF(): String = throw UnsupportedOperationException()
+    }
+
+    private companion object {
+        const val LIST = "kotlin.collections.List"
+        const val MAP = "kotlin.collections.Map"
+
+        /** Unsigned lexicographic order: equal exactly when the bytes are. */
+        val BYTE_ORDER = Comparator<ByteArray> { a, b ->
+            var i = 0
+            while (i < a.size && i < b.size && a[i] == b[i]) i++
+            if (i < a.size && i < b.size) (a[i].toInt() and 0xff) - (b[i].toInt() and 0xff) else a.size - b.size
+        }
+
+        /** At most the first 16 bytes, so a long key doesn't make a long message. */
+        fun hexPrefix(bytes: ByteArray): String = bytes.take(16).joinToString(" ") { "%02x".format(it) } +
+            if (bytes.size > 16) " … (${bytes.size} bytes)" else ""
+    }
 }
