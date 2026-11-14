@@ -115,10 +115,14 @@ A failure from `typeInfo` does not silently fall back to Flink's generic/Kryo ty
 
 The first end-to-end milestone is a `@FlinkType` data class mapped through a view, keyed and processed with typed state, with serializer snapshots that restore state correctly. Generated serializers are intended to avoid reflection on the per-record path. They will rebuild a data class by calling its primary constructor, so an `init` block may check its arguments but must not change a constructor property. Flinkt can't detect a block that does, and the value would then change on every read and copy. A value must also pass those checks whenever it's written or copied, after a `var` was assigned too: one that doesn't is written without error and then fails every read and copy ([details](docs/architecture.md#rebuilding-through-the-constructor)). Stable IDs for enum constants and sealed subtypes, and explicit compatibility rules for values and keys, are designed but not implemented. The [schema evolution decision record](docs/schema-evolution.md) separates the target from the stages and evidence still needed to reach it.
 
+<a id="nullability"></a>
+The bytes those serializers will write, and the snapshots Flink stores beside them, are decided in the [persisted format](docs/persisted-format.md) record but not implemented. Nullability is part of them. A record starts with one null bitmap for its nullable fields, with a bit set for each field that's null and nothing written for that field. A nullable value anywhere else, such as `typeInfo<User?>()` or an element of a `List<User?>`, is a `00` byte for null, or `01` followed by the value. Until that's implemented, `typeInfo<String?>()` fails, as [Type information](#generic-types) says.
+
 ## Documentation and contributing
 
 - [Architecture](docs/architecture.md): views, type model, key rules, and design decisions.
 - [Schema evolution](docs/schema-evolution.md): planned formats, restore behavior, and migration stages.
+- [Persisted format](docs/persisted-format.md): the bytes of records and serializer snapshots, and what a restore does with them.
 - [Flink compatibility](docs/flink-compatibility.md) and [Kotlin compatibility](docs/kotlin-compatibility.md): target versions and support policies.
 - [Build](docs/build.md) and [testing](docs/testing.md): modules, development commands, and compatibility evidence.
 - [Contributor guidance](AGENTS.md) and [non-code rules](docs/non-code-rules.md): project conventions.
