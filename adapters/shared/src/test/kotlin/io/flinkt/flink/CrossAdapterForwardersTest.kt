@@ -2,6 +2,7 @@ package io.flinkt.flink
 
 import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.fail
@@ -18,8 +19,10 @@ import org.junit.jupiter.api.fail
  *
  * A member is compared as the generator wrote it: its annotations, its declaration and its body. A member that isn't
  * on every line is a difference on each line that has it, so a method whose status or parameter name differs between
- * lines is a difference on each of them. The listing names each difference by its view, its annotations and its
- * declaration, with the packages left out.
+ * lines is a difference on each of them. The listing holds each difference as the generator writes it too, by its view
+ * and its text, packages and body included. So a listed member that changes in any way, even only in the package of a
+ * type or in its body, is an unlisted difference, and its listing a listed one the line no longer generates. A failure
+ * prints each member's text, which is what the listing holds.
  */
 class CrossAdapterForwardersTest {
     @Test
@@ -65,41 +68,80 @@ class CrossAdapterForwardersTest {
     fun `the comparison finds a listed difference that no longer differs`() {
         val adapters = AdapterForwarders.read(ViewCodegen.adapterForwarders)
         val line = PER_LINE_DIFFERENCES.entries.first { it.value.isNotEmpty() }.key
-        val listed = adapters.getValue(line).first { it.description in PER_LINE_DIFFERENCES.getValue(line) }
+        val listed = adapters.getValue(line).first { it in PER_LINE_DIFFERENCES.getValue(line) }
         val others = adapters.filterKeys { it != line }.mapValues { (_, members) -> members + listed }
 
         assertEquals(listOf("$line: listed, but on every line: ${listed.description}"), mismatches(adapters + others).map { it.summary })
     }
 
+    @Test
+    fun `the comparison finds a listed difference that changes only in a package, its body or its annotations`() {
+        // The control for listing members whole: each edit makes a listed member differ from its listing.
+        val adapters = AdapterForwarders.read(ViewCodegen.adapterForwarders)
+        val listings = PER_LINE_DIFFERENCES.flatMap { (line, listed) -> listed.map { line to it } }
+        assertTrue(listings.isNotEmpty(), "Some line has a listed difference")
+        for ((line, listed) in listings) {
+            assertTrue(listed in adapters.getValue(line), "$line generates ${listed.description}")
+            val declaration = listed.text.lines().single { it.startsWith("public ") }
+            // Edits that leave the description as it is, so a listing by description couldn't see them.
+            val unseenByDescription = listOf(
+                // The declaration's first Flink type in another package, as 2.x moved the legacy SinkFunction.
+                listed.text.replace(declaration, declaration.replaceFirst("org.apache.flink.", "org.apache.flink.legacy.")),
+                // A body that makes another call on the Flink object.
+                listed.text.replace("asFlink().", "asFlink().rebalance()."),
+            )
+            for (edit in unseenByDescription) {
+                assertEquals(listed.description, listed.copy(text = edit).description, edit)
+            }
+            for (edit in unseenByDescription + ("@io.flinkt.flink.ExperimentalFlinkApi\n" + listed.text)) {
+                val edited = listed.copy(text = edit)
+                assertNotEquals(listed.text, edited.text, edit)
+                val changed = adapters + (line to adapters.getValue(line).map { if (it == listed) edited else it })
+
+                val expected = listOf("$line: unlisted ${edited.description}", "$line: listed, but not generated: ${listed.description}")
+                assertEquals(expected, mismatches(changed).map { it.summary }, edit)
+            }
+        }
+    }
+
     /**
      * Each difference between the adapters' forwarders that [PER_LINE_DIFFERENCES] doesn't list, and each listed one
-     * that isn't a difference. Lists, not sets, so that two differences with one description need two entries.
+     * that isn't a difference: one that every line generates, or one that its line doesn't generate. Lists, not sets,
+     * so that one member listed twice needs to be generated twice.
      */
     private fun mismatches(adapters: Map<String, List<AdapterForwarders.Member>>): List<Mismatch> {
         val onEveryLine = adapters.values.map { it.toSet() }.reduce { common, members -> common intersect members }
         return adapters.flatMap { (line, members) ->
             val unmatched = PER_LINE_DIFFERENCES[line].orEmpty().toMutableList()
-            val unlisted = members.filterNot { it in onEveryLine }.filterNot { unmatched.remove(it.description) }
-            unlisted.map { Mismatch(line, it.description, it) } + unmatched.map { Mismatch(line, it, null) }
+            val unlisted = members.filterNot { it in onEveryLine }.filterNot { unmatched.remove(it) }
+            unlisted.map { Mismatch(line, it, Mismatch.Kind.UNLISTED) } +
+                unmatched.map { Mismatch(line, it, if (it in onEveryLine) Mismatch.Kind.ON_EVERY_LINE else Mismatch.Kind.NOT_GENERATED) }
         }
     }
 
-    /** A difference that isn't listed, with its [member], or a listed one that isn't a difference, without one. */
-    private class Mismatch(val line: String, val description: String, val member: AdapterForwarders.Member?) {
-        val summary: String = if (member != null) "$line: unlisted $description" else "$line: listed, but on every line: $description"
+    /** A difference that isn't listed, or a listed one that isn't a difference, with the [member] it is about. */
+    private class Mismatch(val line: String, val member: AdapterForwarders.Member, kind: Kind) {
+        enum class Kind(val label: String) {
+            UNLISTED("unlisted"),
+            ON_EVERY_LINE("listed, but on every line:"),
+            NOT_GENERATED("listed, but not generated:"),
+        }
+
+        val summary: String = "$line: ${kind.label} ${member.description}"
 
         /**
-         * The [summary], and the member as the generator wrote it, packages included: two lines can differ only in the
-         * package of a type, which the description leaves out.
+         * The [summary], and the member's text, packages and body included: two members can differ only where the
+         * description leaves out, and the text is what the listing holds.
          */
-        val message: String = summary + member?.text?.lines()?.joinToString("") { "\n        $it" }.orEmpty()
+        val message: String = summary + member.text.lines().joinToString("") { "\n        $it" }
     }
 
     private companion object {
         val VIEWS = sortedSetOf("FlinktDataStreamForwarders", "FlinktKeyedStreamForwarders", "FlinktSingleOutputStreamOperatorForwarders")
 
         /**
-         * The forwarders that one line's adapter has and another's lacks or has with a difference, by line.
+         * The forwarders that one line's adapter has and another's lacks or has with a difference, by line, each as the
+         * generator writes it: its annotations, its declaration and its body, without indentation.
          *
          * On 1.20, these are Flink's own differences between the lines: overloads of forwarded methods that 2.x removed.
          * `partitionCustom` by field position or expression and `assignTimestampsAndWatermarks` with the old assigners
@@ -107,24 +149,54 @@ class CrossAdapterForwardersTest {
          * deprecated itself, so it's forwarded unannotated, as Flink declares it (docs/flink-compatibility.md,
          * "Differences between target lines").
          */
-        val PER_LINE_DIFFERENCES: Map<String, List<String>> = mapOf(
+        val PER_LINE_DIFFERENCES: Map<String, List<AdapterForwarders.Member>> = mapOf(
             "2.3" to emptyList(),
             "1.20" to listOf(
-                "FlinktDataStreamForwarders: @Deprecated(\"Deprecated in Flink: DataStream.partitionCustom\") " +
-                    "fun <K> partitionCustom(partitioner: Partitioner<K>, field: Int): FlinktDataStream<T>",
-                "FlinktDataStreamForwarders: @Deprecated(\"Deprecated in Flink: DataStream.partitionCustom\") " +
-                    "fun <K> partitionCustom(partitioner: Partitioner<K>, field: String): FlinktDataStream<T>",
-                "FlinktDataStreamForwarders: @Deprecated(\"Deprecated in Flink: DataStream.assignTimestampsAndWatermarks\") " +
-                    "fun assignTimestampsAndWatermarks(timestampAndWatermarkAssigner: AssignerWithPeriodicWatermarks<T>): " +
-                    "FlinktSingleOutputStreamOperator<T>",
-                "FlinktDataStreamForwarders: @Deprecated(\"Deprecated in Flink: DataStream.assignTimestampsAndWatermarks\") " +
-                    "fun assignTimestampsAndWatermarks(timestampAndWatermarkAssigner: AssignerWithPunctuatedWatermarks<T>): " +
-                    "FlinktSingleOutputStreamOperator<T>",
-                "FlinktDataStreamForwarders: fun sinkTo(sink: Sink<T, *, *, *>): DataStreamSink<T>",
-                "FlinktDataStreamForwarders: fun sinkTo(sink: Sink<T, *, *, *>, " +
-                    "customSinkOperatorUidHashes: CustomSinkOperatorUidHashes): DataStreamSink<T>",
+                dataStream(
+                    """
+                    @Deprecated("Deprecated in Flink: DataStream.partitionCustom")
+                    public fun <K> partitionCustom(partitioner: org.apache.flink.api.common.functions.Partitioner<K>, field: kotlin.Int): io.flinkt.flink.FlinktDataStream<T> =
+                    io.flinkt.flink.FlinktDataStream(asFlink().partitionCustom(partitioner, field))
+                    """,
+                ),
+                dataStream(
+                    """
+                    @Deprecated("Deprecated in Flink: DataStream.partitionCustom")
+                    public fun <K> partitionCustom(partitioner: org.apache.flink.api.common.functions.Partitioner<K>, field: kotlin.String): io.flinkt.flink.FlinktDataStream<T> =
+                    io.flinkt.flink.FlinktDataStream(asFlink().partitionCustom(partitioner, field))
+                    """,
+                ),
+                dataStream(
+                    """
+                    @Deprecated("Deprecated in Flink: DataStream.assignTimestampsAndWatermarks")
+                    public fun assignTimestampsAndWatermarks(timestampAndWatermarkAssigner: org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks<T>): io.flinkt.flink.FlinktSingleOutputStreamOperator<T> =
+                    io.flinkt.flink.FlinktSingleOutputStreamOperator(asFlink().assignTimestampsAndWatermarks(timestampAndWatermarkAssigner))
+                    """,
+                ),
+                dataStream(
+                    """
+                    @Deprecated("Deprecated in Flink: DataStream.assignTimestampsAndWatermarks")
+                    public fun assignTimestampsAndWatermarks(timestampAndWatermarkAssigner: org.apache.flink.streaming.api.functions.AssignerWithPunctuatedWatermarks<T>): io.flinkt.flink.FlinktSingleOutputStreamOperator<T> =
+                    io.flinkt.flink.FlinktSingleOutputStreamOperator(asFlink().assignTimestampsAndWatermarks(timestampAndWatermarkAssigner))
+                    """,
+                ),
+                dataStream(
+                    """
+                    public fun sinkTo(sink: org.apache.flink.api.connector.sink.Sink<T, *, *, *>): org.apache.flink.streaming.api.datastream.DataStreamSink<T> =
+                    asFlink().sinkTo(sink)
+                    """,
+                ),
+                dataStream(
+                    """
+                    public fun sinkTo(sink: org.apache.flink.api.connector.sink.Sink<T, *, *, *>, customSinkOperatorUidHashes: org.apache.flink.streaming.api.datastream.CustomSinkOperatorUidHashes): org.apache.flink.streaming.api.datastream.DataStreamSink<T> =
+                    asFlink().sinkTo(sink, customSinkOperatorUidHashes)
+                    """,
+                ),
             ),
         )
+
+        /** A member of `FlinktDataStreamForwarders` with [text], as a raw string with a common indentation. */
+        fun dataStream(text: String) = AdapterForwarders.Member("FlinktDataStreamForwarders", text.trimIndent())
     }
 }
 
@@ -136,7 +208,10 @@ object AdapterForwarders {
      * differs between lines is a difference.
      */
     data class Member(val view: String, val text: String) {
-        /** The view, the annotations and the declaration, without `public`, the body or packages. */
+        /**
+         * The view, the annotations and the declaration, without `public`, the body or packages: what a failure names
+         * the member by. The comparison and the listing go by [view] and [text].
+         */
         val description: String
             get() {
                 val lines = text.lines()
