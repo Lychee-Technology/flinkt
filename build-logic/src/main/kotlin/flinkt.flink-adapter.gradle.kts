@@ -135,12 +135,40 @@ val viewCodegenClasspath = configurations.resolvable("viewCodegenProcessorClassp
 dependencies {
     "viewCodegenProcessor"(project(":flinkt-view-codegen"))
 }
+
+// The cross-adapter comparison (docs/testing.md#generated-forwarders) reads the forwarders that every adapter
+// generated. Each adapter offers the Kotlin that KSP generated for it as a variant of its own usage, which no Java
+// classpath asks for, and its tests resolve that variant of every adapter: each project in adapters/, this one
+// included. So each lane's comparison runs the generation of the other adapters too, but none of their tests.
+val forwardersUsage: Usage = objects.named("flinkt-view-forwarders")
+val forwardersElements = configurations.consumable("viewForwardersElements") {
+    attributes { attribute(Usage.USAGE_ATTRIBUTE, forwardersUsage) }
+}
+artifacts {
+    add(forwardersElements.name, layout.buildDirectory.dir("generated/ksp/main/kotlin")) {
+        type = ArtifactTypeDefinition.DIRECTORY_TYPE
+        builtBy("kspKotlin")
+    }
+}
+val adapterForwarders = configurations.dependencyScope("adapterForwarders")
+val adapterForwardersFiles = configurations.resolvable("adapterForwardersFiles") {
+    extendsFrom(adapterForwarders.get())
+    attributes { attribute(Usage.USAGE_ATTRIBUTE, forwardersUsage) }
+}
+val adaptersDirectory: File = rootProject.file("adapters")
+dependencies {
+    for (adapterProject in rootProject.subprojects.filter { it.projectDir.parentFile == adaptersDirectory }) {
+        "adapterForwarders"(project(adapterProject.path))
+    }
+}
+
 tasks.named<Test>("test") {
     jvmArgumentProviders.add(
         objects.newInstance<ViewCodegenTestProperties>().apply {
             processorClasspath.from(viewCodegenClasspath)
             flinkApiFile = namesFile
             flinkVersion = flinkVersionOnClasspath
+            adapterForwarders.from(adapterForwardersFiles)
         },
     )
 }

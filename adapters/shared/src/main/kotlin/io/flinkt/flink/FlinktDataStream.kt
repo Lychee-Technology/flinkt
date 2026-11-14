@@ -20,8 +20,32 @@ import org.apache.flink.streaming.api.datastream.DataStream
  * converts to and a function object passes as it is, so the compiler knows the result type at the call site, and the
  * view gives Flink `typeInfo()` for it. Each has an overload that takes the `TypeInformation` explicitly, for generic
  * code where the type isn't known at the call site. See docs/architecture.md, "Views".
+ *
+ * The other methods only forward, and are generated from the `DataStream` of the adapter's Flink line: `filter`,
+ * `union`, the repartitioning methods, `assignTimestampsAndWatermarks`, and the sinks and terminal calls. Every view
+ * below offers them too.
  */
-@FlinkView(DataStream::class, forward = [])
+@FlinkView(
+    DataStream::class,
+    // The first slice's forward list (docs/architecture.md, "The first slice's forward lists"). It leaves out broadcast,
+    // which has an overload returning BroadcastStream, the legacy sinks (addSink, writeToSocket, writeUsingOutputFormat),
+    // the @Experimental collectAsync, and the getters. Each is reached through asFlink().
+    forward = [
+        "filter",
+        "union",
+        "rebalance",
+        "rescale",
+        "shuffle",
+        "forward",
+        "global",
+        "partitionCustom",
+        "assignTimestampsAndWatermarks",
+        "sinkTo",
+        "print",
+        "printToErr",
+        "executeAndCollect",
+    ],
+)
 public open class FlinktDataStream<T> internal constructor(
     private val stream: DataStream<T>,
 ) : FlinktDataStreamForwarders<T> {

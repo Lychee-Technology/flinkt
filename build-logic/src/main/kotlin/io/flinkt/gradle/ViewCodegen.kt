@@ -11,6 +11,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -50,10 +51,19 @@ public abstract class ViewCodegenTestProperties : CommandLineArgumentProvider {
     @get:Input
     public abstract val flinkVersion: Property<String>
 
+    /**
+     * The Kotlin that `flinkt-view-codegen` generated in each adapter, this one included: one directory per adapter,
+     * which the cross-adapter comparison reads (docs/testing.md, "Generated forwarders").
+     */
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    public abstract val adapterForwarders: ConfigurableFileCollection
+
     override fun asArguments(): List<String> = listOf(
         "-Dflinkt.test.viewCodegen.classpath=${processorClasspath.asPath}",
         "-Dflinkt.test.viewCodegen.flinkApiFile=${flinkApiFile.get().asFile.absolutePath}",
         "-Dflinkt.test.viewCodegen.flinkVersion=${flinkVersion.get()}",
+        "-Dflinkt.test.viewCodegen.adapterForwarders=${adapterForwarders.asPath}",
     )
 }
 

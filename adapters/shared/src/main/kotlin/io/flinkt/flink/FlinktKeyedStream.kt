@@ -14,7 +14,14 @@ import org.apache.flink.streaming.api.functions.KeyedProcessFunction
  *
  * It offers the operators of [FlinktDataStream] too, which call Flink on the same object.
  */
-@FlinkView(KeyedStream::class, forward = [])
+@FlinkView(
+    KeyedStream::class,
+    // KeyedStream declares none of the first slice's forwarded methods, so the list is empty: the view offers
+    // DataStream's through FlinktDataStream's forwarders (docs/architecture.md, "The first slice's forward lists").
+    // Flink 2.x's @Experimental enableAsyncState stays out, as on FlinktSingleOutputStreamOperator. A keyed stream that
+    // had it enabled before .flinkt() keeps it, and process builds the asynchronous operator.
+    forward = [],
+)
 public class FlinktKeyedStream<T, K> internal constructor(
     private val keyed: KeyedStream<T, K>,
 ) : FlinktDataStream<T>(keyed), FlinktKeyedStreamForwarders<T, K> {
