@@ -72,10 +72,12 @@ A view holds one existing Flink object; it is not itself a `DataStream`. `.flink
 
 The implemented `map` and keyed `process` use a reified result type, and `keyBy` uses a reified key type. They accept Flink's function types and also have overloads taking explicit `TypeInformation`. For generic code or an unsupported result type, supply suitable type information to `map` or `process` explicitly. That picks a Flink serializer, and Flinkt makes no guarantee about it. For keyed `process`, the view calls Flink's public `process` and then `returns` with the output type.
 
-The views also forward a first set of Flink methods that keep the element type. Each calls the Flink method of the same name, with Flink's overloads and parameter names, and returns a view of what Flink returned, so `.map { … }.name("users").keyBy { … }.process(…)` stays in the view:
+The views also forward a first set of Flink methods that keep the element type. Each calls the Flink method of the same name, with Flink's overloads and parameter names:
 
 - on every view: `filter`, `union`, `rebalance`, `rescale`, `shuffle`, `forward`, `global`, `partitionCustom`, `assignTimestampsAndWatermarks`, `sinkTo`, `print`, `printToErr`, and `executeAndCollect`;
 - on an operator or source: `name`, `uid`, `setUidHash`, `setDescription`, `setParallelism`, `setMaxParallelism`, `forceNonParallel`, `setBufferTimeout`, `disableChaining`, `startNewChain`, and `slotSharingGroup`.
+
+A forwarded method whose Flink method returns a stream returns a view of the stream Flink returned, so `.map { … }.name("users").keyBy { … }.process(…)` stays in the view. The sinks and terminal calls return Flink's result as it is: `sinkTo`, `print`, and `printToErr` return Flink's `DataStreamSink`, and `executeAndCollect` returns Flink's `CloseableIterator`, or a `List` when given a limit.
 
 A deprecated Flink method stays deprecated on the view. On the 1.20 adapter that includes overloads 2.x removed, such as `partitionCustom` by field.
 
