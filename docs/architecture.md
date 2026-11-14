@@ -230,6 +230,40 @@ Generated code never subclasses a Flink class. The Flink protocol classes differ
 
 A consuming module reuses generated metadata from its dependencies and doesn't regenerate code for classes it doesn't own.
 
+### Rebuilding through the constructor
+
+Decided in [#42](https://github.com/Lychee-Technology/flinkt/issues/42).
+
+`deserialize`, `copy` and the migration constructor all build a record by calling its primary constructor with the constructor properties they read. They return the value that was written only if constructing it changes none of them. #11 allows `var` constructor properties and `init` blocks, and an `init` block can break that:
+
+```kotlin
+@FlinkType
+data class Counter(var count: Int) { init { count++ } }
+```
+
+`Counter(0)` holds 1 and is written as 1. Decoding calls `Counter(1)`, which holds 2, and copying that gives 3. Each restore of a `ValueState<Counter>` adds one, and so does each `value()` on RocksDB, which decodes on every read. So does each hop between chained operators: with object reuse off, Flink's default, Flink copies every record it passes from one chained operator to the next (`CopyingChainingOutput`, checked in 1.20.5 and 2.3.0). The schema is unchanged and nothing fails.
+
+| In a `@FlinkType` data class | First release |
+|---|---|
+| `init` block that only checks its arguments, such as `require(count >= 0)` | supported |
+| `init` block, or code it calls, that changes a constructor property of its own class or of a value it was passed | not supported, and not checked: a documented contract |
+
+**The contract.** Constructing a record must leave each constructor property equal to the argument passed for it, and must not change the arguments themselves. An `init` block may check its arguments and throw, but must not change a constructor property or mutate a component. Flinkt doesn't check this. A class that breaks it compiles, and its values change on each read and copy.
+
+That rules out normalization too. `data class Email(var address: String) { init { address = address.lowercase() } }` survives a round trip of `Email("A")`, which already holds `"a"`. But after `email.address = "B"` it's written as `"B"` and decodes as `"b"`. A `var` can hold any value when it's written, not only one the constructor produced, so a constructor that's idempotent on its own output isn't enough.
+
+The `var` and the `init` block needn't be in the same class. `data class Outer(val inner: Inner) { init { inner.count++ } }` over `data class Inner(var count: Int)` is written with `count == 1`, decodes as 2 and copies as 3, though `Outer` has only `val`s and `Inner` has no `init` block. A `val` constructor property can't be reassigned, so a record whose data classes have only `val` constructor properties, at every depth, can't break the contract unless code casts a decoded `List` or `Map` to its mutable class. That's why the key rules ([Map keys](#map-keys), [Eligibility](#eligibility)) require `val`s. (`Counter`, `Email` and `Outer` were checked with codec-style reconstruction on Kotlin 2.4.0 and 2.4.21.)
+
+Why a contract rather than a compile error:
+
+- **KSP can't see an `init` block.** KSP 2.3.13's symbol API has no node for one, and a class's declarations look the same with or without it. For `Counter`, for the same class without its `init` block, and for one whose block only calls `require`, KSP lists the same property, the same synthetic `component1` and `copy`, and the same `<init>`, which is the primary constructor (checked through the compile-test harness's KSP on Kotlin 2.4.0 and 2.4.21). So a rule that rejects a `var` constructor property in a class with an `init` block can't be written. It wouldn't be enough anyway. KSP shows no function body, so the rule would also reject a block that only calls `require`, and it would miss `Outer`, whose `init` block and `var` are in different classes. Only a Kotlin compiler plugin sees `init` blocks, and its API isn't stable across compiler releases.
+- **Rejecting every `var` constructor property** would be sound, but it removes a form #11 supports for values, where a state value updated in place needs `var`s, to prevent a mistake most classes with a `var` don't make. A key loses little by the same rule: changing a key after it's stored is already a bug, so a `val` serves wherever a `var` would.
+- **A runtime check in the codec**, comparing each property with its argument after construction, would add a comparison per property, and an `equals()` call per nested record, to every decode and copy. It would still miss `Outer`, whose property is the very object it was passed, with only its contents changed.
+
+Because nothing checks the contract, the generated codecs come with a check that users can run in their own tests. It compares the bytes of `serialize(v)` with those of `serialize(deserialize(serialize(v)))` and of `serialize(copy(v))`. Comparing bytes rather than calling `equals()` catches a change at any depth, `Outer`'s included, and doesn't depend on a hand-written `equals()`. It checks only the values it's given: `Email` passes for a freshly built value and fails only for one whose `address` was assigned afterwards. Which artifact publishes it is still open ([Testkit](testing.md#testkit)).
+
+Turning the contract into a compile error later, if KSP comes to show `init` blocks, changes no bytes, but it rejects classes that compiled before.
+
 ## Type model and registry
 
 Implemented in [#6](https://github.com/Lychee-Technology/flinkt/issues/6), in `flinkt-core`.
@@ -358,7 +392,7 @@ The check is recursive: it covers the key class, its components, type arguments 
 
 Take `data class Ref(val id: Long)` with identity `equals()` and `hashCode()`, and a record with `lookup: Ref` and `values: Map<Ref, String>` whose one key is the `lookup` object. Before a round trip, `values[lookup]` finds the entry. After it, the map still has one entry, but the decoded `lookup` doesn't find it, and the decoded record isn't equal to the original. The same happens when the identity-equal class sits inside the key, as in `Map<Outer, String>` with `data class Outer(val ref: Ref)` whose equality is generated, which is why the check is recursive (modeled with codec-style reconstruction on Kotlin 2.4.20). The read's size check doesn't catch it, because the decoded keys are still distinct. A hand-written `equals()` that reads only persisted fields, such as a case-insensitive comparison of a `String` field, would survive decoding. Flinkt can't tell it apart from one that doesn't, so it's rejected too, for the same reason as a hand-written key in [Keys](#eligibility).
 
-A `var` constructor property is rejected because the constructor might not store its argument unchanged. #11 allows `init` blocks, and KSP doesn't see what one does. In `data class Key(var id: Int) { init { id++ } }`, `Key(0)` holds 1. Decoding calls `Key(1)`, which holds 2, so the decoded key isn't equal to the one written and a lookup with the original key finds nothing (checked on Kotlin 2.4.20). Generated equality doesn't help, because the components themselves changed. A `val` constructor property holds exactly its argument: Kotlin rejects reassigning it in an `init` block ("'val' cannot be reassigned", checked on Kotlin 2.4.20), and a constructor property can't have a custom getter. So a key whose data classes have only `val` constructor properties, over components that also come back equal, comes back equal. An `init` block that only checks its arguments, such as `require(id >= 0)`, is still allowed.
+A `var` constructor property is rejected because the constructor might not store its argument unchanged. #11 allows `init` blocks, and KSP doesn't see them ([Rebuilding through the constructor](#rebuilding-through-the-constructor)). In `data class Key(var id: Int) { init { id++ } }`, `Key(0)` holds 1. Decoding calls `Key(1)`, which holds 2, so the decoded key isn't equal to the one written and a lookup with the original key finds nothing (checked on Kotlin 2.4.20). Generated equality doesn't help, because the components themselves changed. A `val` constructor property holds exactly its argument: Kotlin rejects reassigning it in an `init` block ("'val' cannot be reassigned", checked on Kotlin 2.4.20), and a constructor property can't have a custom getter. So a key whose data classes have only `val` constructor properties, over components that also come back equal, comes back equal. An `init` block that only checks its arguments, such as `require(id >= 0)`, is still allowed.
 
 A collection is rejected anywhere in a key because its equality belongs to its runtime class, not to its declared type. Decoding always builds an `ArrayList` or a `LinkedHashMap`, which compare by content. A `List` key whose class declares its own `equals()` can make two keys unequal, so the outer map has two entries. They decode as two equal `ArrayList`s, and the read fails its distinct-key check on a checkpoint that was written without error. An `IdentityHashMap` key does the same (both modeled on Kotlin 2.4.20), and the runtime check on `Map` values ([Collections](#collections)) catches only that one. Checking the element types can't prevent it, and it's the reason a collection isn't a key in the [key contexts](#eligibility) either.
 
