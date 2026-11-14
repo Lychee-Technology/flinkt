@@ -118,7 +118,7 @@ restore
 
 ### What the first snapshot must carry
 
-These are requirements on #5's format. #5 still decides the bytes.
+These are requirements on #5's format. [persisted-format.md](persisted-format.md#content) decides the bytes and shows where the snapshot meets each one.
 
 - **A symbolic, recursive schema, never a hash.** The snapshot records every type reachable from the serialized type: record fields with their names and full types, nullability at every level, type arguments as substituted, collection shape, value-class wrapper and underlying type, and the enum and sealed ID tables with each subtype's payload schema. A type is named by a string, not resolved to a `Class`, so the schema still describes a type whose class the new job doesn't have.
 - **Two versions.** A snapshot format version covers how the snapshot's own data is encoded. A record format version covers the encoding of records: scalars, strings, null bitmaps, framing. A new snapshot encoding doesn't mean the records changed, and a new record layout doesn't need a new snapshot class.
@@ -126,7 +126,7 @@ These are requirements on #5's format. #5 still decides the bytes.
 - **Type identity.** A generated type is identified by its JVM class name, as `Class.getName()` spells it, for example `com.example.User`.
 - **Field identity by name.** A field is identified by its Kotlin property name, not by its constructor position.
 - **Constructor order.** Each record's schema also records the order of its primary constructor's parameters. It doesn't decide the bytes or a field's identity. A data class's generated `hashCode()` follows it, so the planner needs it for a partition key ([Keys](#keys)).
-- **Canonical field order.** Records write fields in an order derived from their names, so a pure declaration reorder changes no bytes. The recommended contract is ascending `String.compareTo` order of the property names, which is locale-independent and the same in every JVM. #5 confirms it with a prototype that shows generated code reading into locals in that order and then calling the constructor, so Kotlin constructor semantics don't change.
+- **Canonical field order.** Records write fields in an order derived from their names, so a pure declaration reorder changes no bytes. The contract is ascending `String.compareTo` order of the property names, which is locale-independent and the same in every JVM. #5's prototype shows generated code reading into locals in that order and then calling the constructor, so Kotlin constructor semantics don't change ([Field order](persisted-format.md#field-order)).
 - **Compact records.** Records carry no field names, type names or schema. Metadata belongs in the snapshot.
 - **Nested values inline.** A nested record is written in place, with no length prefix. A migration consumes a removed nested value by walking its old schema, so the steady-state path doesn't pay a prefix on every nested value to make a later skip cheaper.
 - **The key role**: map key or partition key ([Keys](#keys)).
@@ -145,7 +145,7 @@ The old-layout serializer reads bytes the old serializer wrote, driven by the ol
 
 Flink also writes with it. A state the new job doesn't register again keeps the old snapshot's serializer. The heap backend and operator state write that state with it at every later checkpoint, and both backends record its snapshot as the state's snapshot ([What Flink does on restore](#what-flink-does-on-restore)). So the old-layout serializer writes current values back in the old layout, and its snapshot is the old schema, exactly. A snapshot that described any other layout would make the next restore read the carried bytes wrongly, and Flink wouldn't notice. Added fields aren't written, and their default is supplied again on the next migration. A removed field has no value in a current object. `PojoSerializer` writes a null there, which its per-field null marker allows. A Flinkt record has no null marker for a non-null field, so [#35](https://github.com/Lychee-Technology/flinkt/issues/35) decides what it writes. The candidate is a placeholder that the old schema can read, with the snapshot marking the field's value as dropped. A later declaration that adds a field of that name then gets its migration default, not the placeholder.
 
-Both backends call `restoreSerializer()` at restore for every restored state, registered or not. The heap backend reads with it, and RocksDB asks for it while creating column families. If it fails for an incompatible plan, the restore fails even for a state the new job no longer uses. If it instead returns a serializer that refuses to read or write but keeps the old snapshot, RocksDB can carry that state forward, and the heap backend still fails when it reads it. #5 decides which.
+Both backends call `restoreSerializer()` at restore for every restored state, registered or not. The heap backend reads with it, and RocksDB asks for it while creating column families. If it fails for an incompatible plan, the restore fails even for a state the new job no longer uses. If it instead returns a serializer that refuses to read or write but keeps the old snapshot, RocksDB can carry that state forward, and the heap backend still fails when it reads it. #5 decided that it fails, with the planner's diagnostic, and so it does when the current job has no class or codec for the state's type ([Restore](persisted-format.md#restore)).
 
 ### Constructing current values
 
@@ -180,8 +180,7 @@ So Flinkt's target matches `PojoSerializer` on removal, recursive migration, typ
 
 ## Open decisions
 
-- **#5:** the record bytes, within the constraints above: scalar and string encodings, the null bitmap's size, bit order and nullable-field order, the top-level nullable marker, and the snapshot's own encoding. What `restoreSerializer()` returns for an incompatible plan, as above.
-- **#35:** what the old-layout serializer writes for a removed field when Flink writes a carried state with it.
+- **#35:** what the old-layout serializer writes for a removed field when Flink writes a carried state with it. #5 reserved a critical field attribute in the snapshot for marking such a value as dropped ([Attributes](persisted-format.md#attributes)).
 - **#32:** whether the key role takes part in `TypeInformation` equality. Flink requires the key types of two connected keyed streams to be equal (`ConnectedStreams`, checked in 2.3.0), so a role in equality would stop a stream keyed through the view from connecting to one keyed through `asFlink()` with the same type.
 - **#18:** the value-class representation. The direction is recorded in [architecture.md](architecture.md#open-questions).
 - **#37:** migration defaults for added fields.
