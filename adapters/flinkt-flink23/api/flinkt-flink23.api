@@ -3,12 +3,72 @@ public abstract interface annotation class io/flinkt/flink/ExperimentalFlinkApi 
 
 public class io/flinkt/flink/FlinktDataStream : io/flinkt/flink/FlinktDataStreamForwarders {
 	public fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public fun assignTimestampsAndWatermarks (Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun executeAndCollect ()Lorg/apache/flink/util/CloseableIterator;
+	public fun executeAndCollect (I)Ljava/util/List;
+	public fun executeAndCollect (Ljava/lang/String;)Lorg/apache/flink/util/CloseableIterator;
+	public fun executeAndCollect (Ljava/lang/String;I)Ljava/util/List;
+	public fun filter (Lorg/apache/flink/api/common/functions/FilterFunction;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun forward ()Lio/flinkt/flink/FlinktDataStream;
+	public fun global ()Lio/flinkt/flink/FlinktDataStream;
 	public final fun keyBy (Lorg/apache/flink/api/java/functions/KeySelector;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lio/flinkt/flink/FlinktKeyedStream;
 	public final fun map (Lorg/apache/flink/api/common/functions/MapFunction;Lorg/apache/flink/api/common/typeinfo/TypeInformation;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun partitionCustom (Lorg/apache/flink/api/common/functions/Partitioner;Lorg/apache/flink/api/java/functions/KeySelector;)Lio/flinkt/flink/FlinktDataStream;
+	public fun print ()Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun print (Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun printToErr ()Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun printToErr (Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun rebalance ()Lio/flinkt/flink/FlinktDataStream;
+	public fun rescale ()Lio/flinkt/flink/FlinktDataStream;
+	public fun shuffle ()Lio/flinkt/flink/FlinktDataStream;
+	public fun sinkTo (Lorg/apache/flink/api/connector/sink2/Sink;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun sinkTo (Lorg/apache/flink/api/connector/sink2/Sink;Lorg/apache/flink/streaming/api/datastream/CustomSinkOperatorUidHashes;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun union ([Lio/flinkt/flink/FlinktDataStream;)Lio/flinkt/flink/FlinktDataStream;
 }
 
 public abstract interface class io/flinkt/flink/FlinktDataStreamForwarders {
 	public abstract fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
+	public fun assignTimestampsAndWatermarks (Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun executeAndCollect ()Lorg/apache/flink/util/CloseableIterator;
+	public fun executeAndCollect (I)Ljava/util/List;
+	public fun executeAndCollect (Ljava/lang/String;)Lorg/apache/flink/util/CloseableIterator;
+	public fun executeAndCollect (Ljava/lang/String;I)Ljava/util/List;
+	public fun filter (Lorg/apache/flink/api/common/functions/FilterFunction;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun forward ()Lio/flinkt/flink/FlinktDataStream;
+	public fun global ()Lio/flinkt/flink/FlinktDataStream;
+	public fun partitionCustom (Lorg/apache/flink/api/common/functions/Partitioner;Lorg/apache/flink/api/java/functions/KeySelector;)Lio/flinkt/flink/FlinktDataStream;
+	public fun print ()Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun print (Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun printToErr ()Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun printToErr (Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun rebalance ()Lio/flinkt/flink/FlinktDataStream;
+	public fun rescale ()Lio/flinkt/flink/FlinktDataStream;
+	public fun shuffle ()Lio/flinkt/flink/FlinktDataStream;
+	public fun sinkTo (Lorg/apache/flink/api/connector/sink2/Sink;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun sinkTo (Lorg/apache/flink/api/connector/sink2/Sink;Lorg/apache/flink/streaming/api/datastream/CustomSinkOperatorUidHashes;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public fun union ([Lio/flinkt/flink/FlinktDataStream;)Lio/flinkt/flink/FlinktDataStream;
+}
+
+public final class io/flinkt/flink/FlinktDataStreamForwarders$DefaultImpls {
+	public static fun assignTimestampsAndWatermarks (Lio/flinkt/flink/FlinktDataStreamForwarders;Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lorg/apache/flink/util/CloseableIterator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktDataStreamForwarders;I)Ljava/util/List;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktDataStreamForwarders;Ljava/lang/String;)Lorg/apache/flink/util/CloseableIterator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktDataStreamForwarders;Ljava/lang/String;I)Ljava/util/List;
+	public static fun filter (Lio/flinkt/flink/FlinktDataStreamForwarders;Lorg/apache/flink/api/common/functions/FilterFunction;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun forward (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun global (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun partitionCustom (Lio/flinkt/flink/FlinktDataStreamForwarders;Lorg/apache/flink/api/common/functions/Partitioner;Lorg/apache/flink/api/java/functions/KeySelector;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun print (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun print (Lio/flinkt/flink/FlinktDataStreamForwarders;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun printToErr (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun printToErr (Lio/flinkt/flink/FlinktDataStreamForwarders;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun rebalance (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun rescale (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun shuffle (Lio/flinkt/flink/FlinktDataStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun sinkTo (Lio/flinkt/flink/FlinktDataStreamForwarders;Lorg/apache/flink/api/connector/sink2/Sink;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun sinkTo (Lio/flinkt/flink/FlinktDataStreamForwarders;Lorg/apache/flink/api/connector/sink2/Sink;Lorg/apache/flink/streaming/api/datastream/CustomSinkOperatorUidHashes;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun union (Lio/flinkt/flink/FlinktDataStreamForwarders;[Lio/flinkt/flink/FlinktDataStream;)Lio/flinkt/flink/FlinktDataStream;
 }
 
 public final class io/flinkt/flink/FlinktKeyedStream : io/flinkt/flink/FlinktDataStream, io/flinkt/flink/FlinktKeyedStreamForwarders {
@@ -22,6 +82,28 @@ public abstract interface class io/flinkt/flink/FlinktKeyedStreamForwarders : io
 	public abstract fun asFlink ()Lorg/apache/flink/streaming/api/datastream/KeyedStream;
 }
 
+public final class io/flinkt/flink/FlinktKeyedStreamForwarders$DefaultImpls {
+	public static fun assignTimestampsAndWatermarks (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lorg/apache/flink/util/CloseableIterator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktKeyedStreamForwarders;I)Ljava/util/List;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Ljava/lang/String;)Lorg/apache/flink/util/CloseableIterator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Ljava/lang/String;I)Ljava/util/List;
+	public static fun filter (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Lorg/apache/flink/api/common/functions/FilterFunction;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun forward (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun global (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun partitionCustom (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Lorg/apache/flink/api/common/functions/Partitioner;Lorg/apache/flink/api/java/functions/KeySelector;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun print (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun print (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun printToErr (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun printToErr (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun rebalance (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun rescale (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun shuffle (Lio/flinkt/flink/FlinktKeyedStreamForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun sinkTo (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Lorg/apache/flink/api/connector/sink2/Sink;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun sinkTo (Lio/flinkt/flink/FlinktKeyedStreamForwarders;Lorg/apache/flink/api/connector/sink2/Sink;Lorg/apache/flink/streaming/api/datastream/CustomSinkOperatorUidHashes;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun union (Lio/flinkt/flink/FlinktKeyedStreamForwarders;[Lio/flinkt/flink/FlinktDataStream;)Lio/flinkt/flink/FlinktDataStream;
+}
+
 public final class io/flinkt/flink/FlinktKt {
 	public static final fun flinkt (Lorg/apache/flink/streaming/api/datastream/DataStream;)Lio/flinkt/flink/FlinktDataStream;
 	public static final fun flinkt (Lorg/apache/flink/streaming/api/datastream/KeyedStream;)Lio/flinkt/flink/FlinktKeyedStream;
@@ -31,11 +113,69 @@ public final class io/flinkt/flink/FlinktKt {
 public final class io/flinkt/flink/FlinktSingleOutputStreamOperator : io/flinkt/flink/FlinktDataStream, io/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders {
 	public synthetic fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
 	public fun asFlink ()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;
+	public fun disableChaining ()Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun forceNonParallel ()Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun name (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setBufferTimeout (J)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setDescription (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setMaxParallelism (I)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setParallelism (I)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setUidHash (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun slotSharingGroup (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun slotSharingGroup (Lorg/apache/flink/api/common/operators/SlotSharingGroup;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun startNewChain ()Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun uid (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
 }
 
 public abstract interface class io/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders : io/flinkt/flink/FlinktDataStreamForwarders {
 	public synthetic fun asFlink ()Lorg/apache/flink/streaming/api/datastream/DataStream;
 	public abstract fun asFlink ()Lorg/apache/flink/streaming/api/datastream/SingleOutputStreamOperator;
+	public fun disableChaining ()Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun forceNonParallel ()Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun name (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setBufferTimeout (J)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setDescription (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setMaxParallelism (I)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setParallelism (I)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun setUidHash (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun slotSharingGroup (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun slotSharingGroup (Lorg/apache/flink/api/common/operators/SlotSharingGroup;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun startNewChain ()Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public fun uid (Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+}
+
+public final class io/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders$DefaultImpls {
+	public static fun assignTimestampsAndWatermarks (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Lorg/apache/flink/api/common/eventtime/WatermarkStrategy;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun disableChaining (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lorg/apache/flink/util/CloseableIterator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;I)Ljava/util/List;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lorg/apache/flink/util/CloseableIterator;
+	public static fun executeAndCollect (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;I)Ljava/util/List;
+	public static fun filter (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Lorg/apache/flink/api/common/functions/FilterFunction;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun forceNonParallel (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun forward (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun global (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun name (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun partitionCustom (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Lorg/apache/flink/api/common/functions/Partitioner;Lorg/apache/flink/api/java/functions/KeySelector;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun print (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun print (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun printToErr (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun printToErr (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun rebalance (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun rescale (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun setBufferTimeout (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;J)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun setDescription (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun setMaxParallelism (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;I)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun setParallelism (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;I)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun setUidHash (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun shuffle (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktDataStream;
+	public static fun sinkTo (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Lorg/apache/flink/api/connector/sink2/Sink;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun sinkTo (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Lorg/apache/flink/api/connector/sink2/Sink;Lorg/apache/flink/streaming/api/datastream/CustomSinkOperatorUidHashes;)Lorg/apache/flink/streaming/api/datastream/DataStreamSink;
+	public static fun slotSharingGroup (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun slotSharingGroup (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Lorg/apache/flink/api/common/operators/SlotSharingGroup;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun startNewChain (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun uid (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;Ljava/lang/String;)Lio/flinkt/flink/FlinktSingleOutputStreamOperator;
+	public static fun union (Lio/flinkt/flink/FlinktSingleOutputStreamOperatorForwarders;[Lio/flinkt/flink/FlinktDataStream;)Lio/flinkt/flink/FlinktDataStream;
 }
 
 public final class io/flinkt/flink/KeyTypesKt {

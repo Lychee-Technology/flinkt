@@ -85,7 +85,7 @@ Flink serializer             created by Flink from the TypeInformation and its S
 
 ## Views
 
-The hand-written part, entering with `.flinkt()`, `asFlink()` and the type-introducing `map`, `keyBy` and keyed `process`, is implemented in [#9](https://github.com/Lychee-Technology/flinkt/issues/9). The forwarded methods are [#10](https://github.com/Lychee-Technology/flinkt/issues/10)'s, so each view lists none yet.
+The hand-written part, entering with `.flinkt()`, `asFlink()` and the type-introducing `map`, `keyBy` and keyed `process`, is implemented in [#9](https://github.com/Lychee-Technology/flinkt/issues/9). [#10](https://github.com/Lychee-Technology/flinkt/issues/10) chose the forwarded methods ([The first slice's forward lists](#the-first-slices-forward-lists)).
 
 These rules keep the [user-facing promises](../README.md#flinkt-streams) true:
 
@@ -136,7 +136,7 @@ The generator follows one principle: a forwarder carries Flink's API as Flink de
 | returns a `TypeInformation` (`getType`) | build error: its forwarder would read the type of the stream the view holds, which [rule 1](#views) forbids |
 | is deprecated | forwarded and annotated with Kotlin's `@Deprecated`, so a Kotlin caller gets the warning a Java caller gets |
 | uses a deprecated type in its signature, but isn't deprecated itself (1.20's `sinkTo` for the legacy `Sink`) | forwarded unannotated, as Flink declares it |
-| is `@Experimental` (for example 2.x `enableAsyncState`) | forwarded and annotated with `@ExperimentalFlinkApi`, a Kotlin `@RequiresOptIn` marker at warning level, so a call without `@OptIn` warns |
+| is `@Experimental` (for example 2.x `enableAsyncState`, which no view lists) | forwarded and annotated with `@ExperimentalFlinkApi`, a Kotlin `@RequiresOptIn` marker at warning level, so a call without `@OptIn` warns |
 
 A Flink stream or builder type is a `DataStream`, or any class of Flink's stream API package, `org.apache.flink.streaming.api.datastream`, nested classes included. `DataStreamSink` is the exception: a sink ends a chain, its methods only configure it, and `print` and `sinkTo` return it as it is. The rule goes by package rather than by a list, so a builder type that a new Flink line adds there fails the build until it has a view or is listed as an exception, instead of being forwarded unnoticed.
 
@@ -147,6 +147,29 @@ A name is listed once and covers all of its overloads, so each overload has to p
 The views follow Flink's class hierarchy. When a superclass of a view's Flink class has a view, as `DataStream` has for `SingleOutputStreamOperator` and `KeyedStream`, the generated interface extends that view's, and `asFlink()` narrows to the subclass. A method is forwarded by the view of the class that declares it, and every view below gets it: `filter` is listed on `FlinktDataStream`, and `FlinktKeyedStream` has it too. Listing it on a view below fails the build and names the view to list it on. A method that a Flink subclass overrides is the subclass's own, so its view can forward it again, and the forwarder overrides the one above with the subclass's view as the result, as `DataStreamSource.setParallelism` returns `DataStreamSource`. A name can have overloads on both levels: on 2.x, `KeyedStream` overrides `flatMap(FlatMapFunction, TypeInformation)` and inherits `DataStream`'s `flatMap(FlatMapFunction)`. Then each view forwards the overloads its class declares, so the name is listed on both. Listing it only on the view below fails the build and names the view above, so no overload of a listed name goes unforwarded and unchecked.
 
 The generator runs against every line's classes. A listed method is therefore checked on every line, and a method that exists on only some lines fails the build on the others. Line-specific methods go in the line's own source set. Deprecated overloads that only one line has are Flink's own difference between lines. They appear as listed per-line differences in the cross-adapter API comparison. In the spike, 1.20 had six such overloads.
+
+#### The first slice's forward lists
+
+[#10](https://github.com/Lychee-Technology/flinkt/issues/10) chose these, within the generator's rules:
+
+| View | Forwards |
+|---|---|
+| `FlinktDataStream` | `filter`, `union`, `rebalance`, `rescale`, `shuffle`, `forward`, `global`, `partitionCustom`, `assignTimestampsAndWatermarks`, `sinkTo`, `print`, `printToErr`, `executeAndCollect` |
+| `FlinktSingleOutputStreamOperator` | `name`, `uid`, `setUidHash`, `setDescription`, `setParallelism`, `setMaxParallelism`, `forceNonParallel`, `setBufferTimeout`, `disableChaining`, `startNewChain`, `slotSharingGroup` |
+| `FlinktKeyedStream` | nothing of its own: `KeyedStream` declares none of these methods, and the view offers `DataStream`'s through `FlinktDataStream`'s forwarders |
+
+Fluent configuration that returns the view is what keeps `.map { … }.name("users").keyBy { … }.process(…)` in Flinkt. On 1.20 the lists also forward six overloads that 2.x removed: `partitionCustom` by field position and by field expression, and `assignTimestampsAndWatermarks` with the two old assigner types, all deprecated, and the two `sinkTo` overloads for the legacy `connector.sink.Sink`. They're the listed per-line differences of the cross-adapter comparison.
+
+These are left out, and reached through `asFlink()`:
+
+- **`enableAsyncState()`**, on `SingleOutputStreamOperator` and `KeyedStream` in 2.x. It's `@Experimental`, Flink 2.x's async state (API v2) is out of scope for [#31](https://github.com/Lychee-Technology/flinkt/issues/31), and a forwarder would make it part of Flinkt's public API. Async state enabled on the Flink object before `.flinkt()` is kept: an operator's flag is on its transformation, and a keyed stream's on the object the view holds ([State on stream objects](flink-compatibility.md#state-on-stream-objects)).
+- **`returns`**. A view's operators give Flink the type from the call site, and `returns` would retype the stream afterwards. Two of its overloads, `returns(Class)` and `returns(TypeHint)`, take the type from Flink's `TypeExtractor`, which Flinkt doesn't build on ([Do not build correctness around `TypeExtractor`](flink-compatibility.md#do-not-build-correctness-around-typeextractor)).
+- **`broadcast`**, because `broadcast(MapStateDescriptor...)` returns `BroadcastStream`, which has no view. It waits for overload selection ([Open questions](#open-questions)).
+- **The legacy sinks**: `addSink`, whose `SinkFunction` moved to a `legacy` package in 2.x, and `writeToSocket` and the deprecated `writeUsingOutputFormat`. `sinkTo` is the sink API on every line.
+- **`collectAsync`**, which is `@Experimental`, and `addMetricVariable`, which only 2.3 has.
+- **The getters**, such as `getParallelism`, `getName` and `getExecutionConfig`. They configure nothing, and a chain doesn't continue from what they return. On `asFlink()` Kotlin reads them as properties, as in `asFlink().parallelism`, which a forwarder wouldn't offer.
+- **The keyed aggregations**, `reduce`, `sum`, `min`, `max`, `minBy` and `maxBy`. The generator would forward them, but they aren't part of the first slice, and all but `reduce` select a field by position or expression, which depends on how the `TypeInformation` for generated types ([#12](https://github.com/Lychee-Technology/flinkt/issues/12)) exposes fields.
+- **Type-introducing and builder methods**, which the generator refuses: `getSideOutput`, `cache`, windows, `connect`, joins and the like ([Views after the first slice](#open-questions)).
 
 #### Parameter names
 

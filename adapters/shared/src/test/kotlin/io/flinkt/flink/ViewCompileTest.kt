@@ -138,6 +138,108 @@ class ViewCompileTest {
 
     @ParameterizedTest
     @EnumSource(KotlinCompiler::class)
+    fun `fluent calls keep the chain in the view, with its exact type after each`(compiler: KotlinCompiler) {
+        // The chain of docs/testing.md, "Preserve the view through fluent calls".
+        compile(
+            compiler,
+            """
+            fun chain(stream: FlinktDataStream<Event>) {
+                val normalized = stream.map { normalize(it) }
+                exactTypeOf(normalized).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                val named = normalized.name("normalize")
+                exactTypeOf(named).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                val identified = named.uid("normalize-v1")
+                exactTypeOf(identified).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                val parallel = identified.setParallelism(4)
+                exactTypeOf(parallel).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                val valid = parallel.filter { it.valid }
+                exactTypeOf(valid).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+            }
+            """,
+        ).assertSuccess()
+    }
+
+    @ParameterizedTest
+    @EnumSource(KotlinCompiler::class)
+    fun `the first milestone's chain stays in the view`(compiler: KotlinCompiler) {
+        compile(
+            compiler,
+            """
+            fun milestone(events: FlinktDataStream<Event>) {
+                val users = events.map { User(it.id, it.name) }
+                exactTypeOf(users).shouldBe<FlinktSingleOutputStreamOperator<User>>()
+                val named = users.name("users")
+                exactTypeOf(named).shouldBe<FlinktSingleOutputStreamOperator<User>>()
+                val keyed = named.keyBy { it.id }
+                exactTypeOf(keyed).shouldBe<FlinktKeyedStream<User, Long>>()
+                val sessions = keyed.process(SessionFunction())
+                exactTypeOf(sessions).shouldBe<FlinktSingleOutputStreamOperator<Session>>()
+                exactTypeOf(sessions.name("sessions").uid("sessions-v1")).shouldBe<FlinktSingleOutputStreamOperator<Session>>()
+            }
+            """,
+        ).assertSuccess()
+    }
+
+    @ParameterizedTest
+    @EnumSource(KotlinCompiler::class)
+    fun `each forwarded method has its exact type on each view that offers it`(compiler: KotlinCompiler) {
+        // DataStream's methods are forwarded by FlinktDataStream, and every view below offers them, with the same types.
+        val streamCalls = { stream: String ->
+            """
+            exactTypeOf($stream.filter { it.valid }).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+            exactTypeOf($stream.union(stream, operator, keyed)).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.rebalance()).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.rescale()).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.shuffle()).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.forward()).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.global()).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.partitionCustom(partitioner) { it.id }).shouldBe<FlinktDataStream<Event>>()
+            exactTypeOf($stream.assignTimestampsAndWatermarks(strategy)).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+            exactTypeOf($stream.sinkTo(sink)).shouldBe<DataStreamSink<Event>>()
+            exactTypeOf($stream.sinkTo(sink, CustomSinkOperatorUidHashes.DEFAULT)).shouldBe<DataStreamSink<Event>>()
+            exactTypeOf($stream.print()).shouldBe<DataStreamSink<Event>>()
+            exactTypeOf($stream.print(sinkIdentifier = "events")).shouldBe<DataStreamSink<Event>>()
+            exactTypeOf($stream.printToErr()).shouldBe<DataStreamSink<Event>>()
+            exactTypeOf($stream.printToErr(sinkIdentifier = "events")).shouldBe<DataStreamSink<Event>>()
+            exactTypeOf($stream.executeAndCollect()).shouldBe<CloseableIterator<Event>>()
+            exactTypeOf($stream.executeAndCollect(limit = 3)).shouldBe<List<Event>>()
+            exactTypeOf($stream.executeAndCollect(jobExecutionName = "job")).shouldBe<CloseableIterator<Event>>()
+            exactTypeOf($stream.executeAndCollect(jobExecutionName = "job", limit = 3)).shouldBe<List<Event>>()
+            """.trimIndent()
+        }
+        compile(
+            compiler,
+            """
+            fun forwarded(
+                stream: FlinktDataStream<Event>,
+                operator: FlinktSingleOutputStreamOperator<Event>,
+                keyed: FlinktKeyedStream<Event, Long>,
+                sink: Sink<Event>,
+                strategy: WatermarkStrategy<Event>,
+                partitioner: Partitioner<Long>,
+                group: SlotSharingGroup,
+            ) {
+                ${listOf("stream", "operator", "keyed").joinToString("\n") { streamCalls(it) }.prependIndent(" ".repeat(16)).trimStart()}
+                // SingleOutputStreamOperator's, which FlinktSingleOutputStreamOperator forwards.
+                exactTypeOf(operator.name("events")).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.uid("events-v1")).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.setUidHash("2e588ce1c86a9d46e2e85186773ce4fd")).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.setDescription("Events")).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.setParallelism(parallelism = 2)).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.setMaxParallelism(maxParallelism = 64)).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.forceNonParallel()).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.setBufferTimeout(timeoutMillis = 10)).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.disableChaining()).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.startNewChain()).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.slotSharingGroup("events")).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+                exactTypeOf(operator.slotSharingGroup(group)).shouldBe<FlinktSingleOutputStreamOperator<Event>>()
+            }
+            """,
+        ).assertSuccess()
+    }
+
+    @ParameterizedTest
+    @EnumSource(KotlinCompiler::class)
     fun `a view isn't a Flink stream`(compiler: KotlinCompiler) {
         compile(compiler, "fun leave(view: FlinktDataStream<Event>) { val d: DataStream<Event> = view }")
             .assertFailure("INITIALIZER_TYPE_MISMATCH")
@@ -153,6 +255,17 @@ class ViewCompileTest {
         // It does on asFlink().
         compile(compiler, "fun connect(view: FlinktDataStream<Event>, other: DataStream<User>) = view.asFlink().connect(other)")
             .assertSuccess()
+        // Methods the first slice leaves out of the forward lists: returns() would retype the stream, broadcast has an
+        // overload the generator refuses, and getSideOutput introduces a type.
+        val unoffered = listOf(
+            "returns" to "fun f(view: FlinktSingleOutputStreamOperator<Event>, type: TypeInformation<Event>) = view.returns(type)",
+            "broadcast" to "fun f(view: FlinktDataStream<Event>) = view.broadcast()",
+            "getSideOutput" to "fun f(view: FlinktSingleOutputStreamOperator<Event>, tag: OutputTag<User>) = view.getSideOutput(tag)",
+        )
+        for ((method, job) in unoffered) {
+            compile(compiler, job).assertFailure("UNRESOLVED_REFERENCE", "Unresolved reference '$method'")
+            compile(compiler, job.replace("view.$method", "view.asFlink().$method")).assertSuccess()
+        }
     }
 
     @ParameterizedTest
@@ -190,16 +303,24 @@ class ViewCompileTest {
             import io.flinkt.flink.flinkt
             import io.flinkt.testing.exactTypeOf
             import io.flinkt.testing.shouldBe
+            import org.apache.flink.api.common.eventtime.WatermarkStrategy
             import org.apache.flink.api.common.functions.MapFunction
+            import org.apache.flink.api.common.functions.Partitioner
+            import org.apache.flink.api.common.operators.SlotSharingGroup
             import org.apache.flink.api.common.typeinfo.TypeInformation
+            import org.apache.flink.api.connector.sink2.Sink
             import org.apache.flink.api.java.functions.KeySelector
+            import org.apache.flink.streaming.api.datastream.CustomSinkOperatorUidHashes
             import org.apache.flink.streaming.api.datastream.DataStream
+            import org.apache.flink.streaming.api.datastream.DataStreamSink
             import org.apache.flink.streaming.api.datastream.DataStreamSource
             import org.apache.flink.streaming.api.datastream.KeyedStream
             import org.apache.flink.streaming.api.datastream.SideOutputDataStream
             import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator
             import org.apache.flink.streaming.api.functions.KeyedProcessFunction
+            import org.apache.flink.util.CloseableIterator
             import org.apache.flink.util.Collector
+            import org.apache.flink.util.OutputTag
         """.trimIndent()
 
         val MODEL = """
@@ -211,7 +332,11 @@ class ViewCompileTest {
             import org.apache.flink.streaming.api.functions.KeyedProcessFunction
             import org.apache.flink.util.Collector
 
-            data class Event(val id: Long, val name: String)
+            data class Event(val id: Long, val name: String) {
+                val valid: Boolean get() = name.isNotEmpty()
+            }
+
+            fun normalize(event: Event) = event.copy(name = event.name.trim())
 
             data class User(val id: Long, val name: String)
 

@@ -24,6 +24,9 @@ object ViewCodegen {
     /** The version of the Flink on the adapter's compile classpath, such as `2.3.0`. */
     val flinkVersion: String = property("flinkVersion")
 
+    /** The Kotlin that the generator wrote in each adapter's build, this one's included: one directory per adapter. */
+    val adapterForwarders: List<File> = property("adapterForwarders").split(File.pathSeparatorChar).map(::File)
+
     fun compile(
         vararg sources: SourceFile,
         compiler: KotlinCompiler = KotlinCompiler.BUILD,
