@@ -21,8 +21,20 @@ object RecordFormat {
     /** The record format version this prototype writes and reads. */
     const val VERSION: Int = 1
 
+    /**
+     * The budget on a string's length, in UTF-16 chars. A writer refuses a longer string, so a reader never meets one
+     * that a release wrote, and fails at the length, before it reads a char.
+     */
+    const val MAX_STRING_LENGTH: Int = 1 shl 26
+
+    /** The budget on a `List`'s or a `Map`'s size. A writer refuses a larger collection, and a reader fails at the size. */
+    const val MAX_COLLECTION_SIZE: Int = 1 shl 26
+
     /** A string of up to this many chars is read into one array of its length. A longer one starts there and grows. */
     const val STRING_CHUNK: Int = 8192
+
+    /** A collection of up to this many elements starts with room for all of them. A larger one starts there and grows. */
+    const val COLLECTION_CHUNK: Int = 1024
 
     private const val CANONICAL_FLOAT_NAN: Int = 0x7fc00000
     private const val CANONICAL_DOUBLE_NAN: Long = 0x7ff8000000000000L
@@ -112,23 +124,28 @@ object RecordFormat {
     /**
      * The char-varint format of Flink's `StringValue.writeString`, specified as Flinkt's own: the length plus one as
      * an unsigned base-128 varint, low group first, then each UTF-16 char as a varint of the same kind. It's lossless
-     * for every `String`, unpaired surrogates included, and has no length limit below `Int.MAX_VALUE - 1` chars.
+     * for every `String`, unpaired surrogates included. A string over [MAX_STRING_LENGTH] chars fails before anything
+     * is written, so no release writes a string it would refuse to read.
      */
     @JvmStatic
     fun writeString(output: DataOutput, value: String) {
         val length = value.length
-        if (length == Int.MAX_VALUE) throw IllegalArgumentException("A String of ${Int.MAX_VALUE} chars is too long")
+        require(length <= MAX_STRING_LENGTH) {
+            "A String of $length chars is over the budget of $MAX_STRING_LENGTH chars, so it can't be persisted"
+        }
         writeVarint(output, length + 1)
         for (i in 0 until length) writeVarint(output, value[i].code)
     }
 
     /**
-     * Reads a string [writeString] wrote. It starts with at most [STRING_CHUNK] chars and doubles as it reads, so a
-     * corrupt length fails at the end of the input instead of allocating for the length it claims.
+     * Reads a string [writeString] wrote. A length over [maxLength] fails before a char is read, however many follow.
+     * It starts with at most [STRING_CHUNK] chars and doubles as it reads, so a corrupt length within the budget fails
+     * at the end of the input instead of allocating for the length it claims.
      */
     @JvmStatic
-    fun readString(input: DataInput): String {
-        val length = readStringLength(input)
+    @JvmOverloads
+    fun readString(input: DataInput, maxLength: Int = MAX_STRING_LENGTH, what: String = "a string"): String {
+        val length = readStringLength(input, maxLength, what)
         var chars = CharArray(minOf(length, STRING_CHUNK))
         for (i in 0 until length) {
             if (i == chars.size) chars = chars.copyOf(minOf(length, chars.size * 2))
@@ -140,11 +157,11 @@ object RecordFormat {
     /** Consumes a string [writeString] wrote, with the checks of [readString], and allocates nothing. */
     @JvmStatic
     fun skipString(input: DataInput) {
-        val length = readStringLength(input)
+        val length = readStringLength(input, MAX_STRING_LENGTH, "a string")
         for (i in 0 until length) readVarint(input, MAX_CHAR_BYTES, Char.MAX_VALUE.code.toLong(), "a char")
     }
 
-    private fun readStringLength(input: DataInput): Int {
+    private fun readStringLength(input: DataInput, maxLength: Int, what: String): Int {
         val lengthPlusOne = readVarint(input, MAX_LENGTH_BYTES, Int.MAX_VALUE.toLong(), "a string length").toInt()
         if (lengthPlusOne == 0) {
             throw MalformedDataException(
@@ -152,7 +169,9 @@ object RecordFormat {
                     "and Flinkt writes null in a null bitmap or a null marker",
             )
         }
-        return lengthPlusOne - 1
+        val length = lengthPlusOne - 1
+        if (length > maxLength) throw MalformedDataException("$what is $length chars long, over the budget of $maxLength")
+        return length
     }
 
     private const val MAX_CHAR_BYTES = 3
@@ -227,6 +246,73 @@ object RecordFormat {
         return nulls
     }
 
+    /**
+     * Writes the size of a `List` or a `Map` (#16): a 4-byte big-endian `Int`. A size over [MAX_COLLECTION_SIZE]
+     * fails before anything is written.
+     */
+    @JvmStatic
+    fun writeCollectionSize(output: DataOutput, size: Int) {
+        require(size <= MAX_COLLECTION_SIZE) {
+            "A collection of $size elements is over the budget of $MAX_COLLECTION_SIZE, so it can't be persisted"
+        }
+        output.writeInt(size)
+    }
+
+    /** Reads a collection size. A negative one is malformed, and one over [MAX_COLLECTION_SIZE] fails at once. */
+    @JvmStatic
+    fun readCollectionSize(input: DataInput): Int {
+        val size = input.readInt()
+        if (size < 0) throw MalformedDataException("a collection size of $size")
+        if (size > MAX_COLLECTION_SIZE) {
+            throw MalformedDataException("a collection size of $size is over the budget of $MAX_COLLECTION_SIZE")
+        }
+        return size
+    }
+
+    /** A `List`: its size, then each element in list order (#16). */
+    @JvmStatic
+    fun <T> writeList(output: DataOutput, list: List<T>, element: (DataOutput, T) -> Unit) {
+        writeCollectionSize(output, list.size)
+        for (value in list) element(output, value)
+    }
+
+    /**
+     * Reads a `List` [writeList] wrote. Nothing is allocated for an element before it's read: the list starts with
+     * room for at most [COLLECTION_CHUNK] elements and grows as they're read. Every element type takes at least one
+     * byte ([PersistedSchema]'s validation rejects one that takes none), so a corrupt size fails at the end of the
+     * input after as many elements as the input holds.
+     */
+    @JvmStatic
+    fun <T> readList(input: DataInput, element: (DataInput) -> T): List<T> {
+        val size = readCollectionSize(input)
+        val list = ArrayList<T>(minOf(size, COLLECTION_CHUNK))
+        repeat(size) { list.add(element(input)) }
+        return list
+    }
+
+    /** A `Map`: its size, then each entry, key then value, in iteration order (#16). */
+    @JvmStatic
+    fun <K, V> writeMap(output: DataOutput, map: Map<K, V>, key: (DataOutput, K) -> Unit, value: (DataOutput, V) -> Unit) {
+        writeCollectionSize(output, map.size)
+        for ((k, v) in map) {
+            key(output, k)
+            value(output, v)
+        }
+    }
+
+    /** Reads a `Map` [writeMap] wrote, allocating as [readList] does. Two equal keys are malformed (#16). */
+    @JvmStatic
+    fun <K, V> readMap(input: DataInput, key: (DataInput) -> K, value: (DataInput) -> V): Map<K, V> {
+        val size = readCollectionSize(input)
+        val map = LinkedHashMap<K, V>(minOf(size, COLLECTION_CHUNK))
+        for (i in 0 until size) {
+            val k = key(input)
+            map[k] = value(input)
+            if (map.size != i + 1) throw MalformedDataException("a map holds the key $k twice")
+        }
+        return map
+    }
+
     /** The marker before a nullable value outside a record field: `00` for null, `01` before a value. */
     @JvmStatic
     fun writeNullMarker(output: DataOutput, isNull: Boolean) {
@@ -240,6 +326,17 @@ object RecordFormat {
         1 -> true
         else -> throw MalformedDataException("a null marker is 00 or 01, not ${hexByte(byte)}")
     }
+
+    /**
+     * The failure for a `00` marker where a value must follow: a present field declared as `T?` whose argument is
+     * nullable. Its bitmap bit already says it isn't null, so `00` would be a second encoding of null that no writer
+     * produces (docs/persisted-format.md, "Null representation").
+     */
+    @JvmStatic
+    fun nullInPresentField(field: String): MalformedDataException = MalformedDataException(
+        "$field is declared as a nullable type parameter and its null bitmap bit is clear, so it holds a value, " +
+            "and its argument's null marker is 01, not 00",
+    )
 
     private fun hexByte(byte: Int): String = "%02x".format(byte)
 

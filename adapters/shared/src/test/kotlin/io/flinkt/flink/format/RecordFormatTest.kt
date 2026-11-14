@@ -128,6 +128,27 @@ class RecordFormatTest {
     }
 
     @Test
+    fun `a field declared T? has a bitmap bit, and after a clear bit a nullable argument's marker is 01, never 00`() {
+        val first = "00 00 00 00 00 00 00 01 02 61"
+        val second = "00 00 00 00 00 00 00 02 02 62"
+        // Canonical order: previous, then value. The bitmap is the same whatever the argument is.
+        val nullable = BoxCodec(NullableCodec(UserCodec))
+        assertGolden(nullable, Box<User?>(User(1, "a"), User(2, "b")), "00 | 01 $second | 01 $first")
+        assertGolden(nullable, Box<User?>(null, User(2, "b")), "00 | 01 $second | 00")
+        assertGolden(nullable, Box<User?>(null, null), "01 | 00")
+        assertGolden(BoxCodec(UserCodec), Box(User(1, "a"), User(2, "b")), "00 | $second | $first")
+        assertGolden(BoxCodec(UserCodec), Box(User(1, "a"), null), "01 | $first")
+
+        // A clear bit, then 00, would be a second encoding of a null previous, which is written 01 | 00.
+        val e = assertThrows<MalformedDataException> { nullable.deserialize(DataInputDeserializer(bytes("00 | 00 | 00"))) }
+        assertEquals(
+            "Box.previous is declared as a nullable type parameter and its null bitmap bit is clear, so it holds a " +
+                "value, and its argument's null marker is 01, not 00",
+            e.message,
+        )
+    }
+
+    @Test
     fun `each scalar's bytes are Flink's built-in serializer's bytes on a DataOutputSerializer`() {
         fun <T> check(serializer: TypeSerializer<T>, values: List<T>, flinkt: (DataOutputView, T) -> Unit) {
             for (value in values) {

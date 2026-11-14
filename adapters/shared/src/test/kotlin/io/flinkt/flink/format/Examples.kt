@@ -192,5 +192,38 @@ class NullableCodec<T : Any>(private val inner: GeneratedCodec<T>) : GeneratedCo
     override fun copy(value: T?): T? = value?.let(inner::copy)
 }
 
+/**
+ * A generic record, whose bytes these are if #22 supports generic classes. `previous` is declared `T?`, so it has a
+ * bitmap bit whatever `T` is, and `value` is declared `T`, so it has none. Both are written by the argument's codec,
+ * which for a nullable argument writes a null marker.
+ */
+data class Box<T>(val value: T, val previous: T?)
+
+/**
+ * Canonical order: `previous`, `value`. Generated once, and given the argument's codec, as #22 would compose it.
+ *
+ * A present `previous` has a clear bitmap bit, and a nullable argument's codec then writes `01` before it. Reading it,
+ * the argument's codec returns `null` only for a `00` marker: a second encoding of null, which no writer produces,
+ * so the read fails.
+ */
+class BoxCodec<T>(private val argument: GeneratedCodec<T>) : GeneratedCodec<Box<T>> {
+    override fun serialize(value: Box<T>, output: DataOutput) {
+        val previous = value.previous
+        output.writeByte(if (previous == null) 0x01 else 0)
+        if (previous != null) argument.serialize(previous, output)
+        argument.serialize(value.value, output)
+    }
+
+    override fun deserialize(input: DataInput): Box<T> {
+        val nulls = input.readUnsignedByte()
+        if (nulls and 0xfe != 0) throw MalformedDataException("Box's null bitmap has 1 bit, not ${"%02x".format(nulls)}")
+        val previous = if (nulls and 0x01 != 0) null else argument.deserialize(input) ?: throw RecordFormat.nullInPresentField("Box.previous")
+        val value = argument.deserialize(input)
+        return Box(value = value, previous = previous)
+    }
+
+    override fun copy(value: Box<T>): Box<T> = value
+}
+
 /** A value whose bytes have been written. */
 fun <T> GeneratedCodec<T>.write(value: T): Written = written { serialize(value, it) }

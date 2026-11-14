@@ -14,12 +14,14 @@ import io.flinkt.schema.ValueClassSchema
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.EOFException
+import java.time.Duration
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot
 import org.apache.flink.core.memory.DataInputDeserializer
 import org.apache.flink.core.memory.DataOutputSerializer
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -112,6 +114,33 @@ class SnapshotFormatTest {
         fails({ it[24] = 3 }, "com.example.Color has no constant with ID 3")
         fails({ it[7] = 0xff.toByte() }, "a collection size of -16777213")
         fails({ it[12] = 2 }, "a null marker is 00 or 01, not 02")
+    }
+
+    @Test
+    fun `a present field declared T? whose argument is nullable has the marker 01, and 00 there fails`() {
+        val root = SchemaType.ClassType("com.example.Envelope", listOf(SchemaTypeArgument.invariant(type("com.example.User", nullable = true))))
+        val schema = PersistedSchema.of(root) { (everyShape - "com.example.UserId" + userCreatedWithLong)[it] }
+        // Envelope<User?>(payload = null, meta = {}, previous = User(2, "b"))
+        val value = bytes(
+            """
+            00                                  Envelope's bitmap: previous is present
+            00 00 00 00                         meta: no entries
+            00                                  payload, declared T: the argument's marker, null
+            01 00 00 00 00 00 00 00 02 02 62    previous, declared T?: the argument's marker, then User(2, "b")
+            """.let(::annotatedHex),
+        )
+        val input = DataInputDeserializer(value)
+        SchemaWalker(schema).skipValue(root, input)
+        assertEquals(0, input.available())
+
+        // A clear bit, then 00, would be a second encoding of a null previous, which sets the bit.
+        val corrupt = value.copyOf().also { it[6] = 0 }
+        val e = assertThrows<MalformedDataException> { SchemaWalker(schema).skipValue(root, DataInputDeserializer(corrupt)) }
+        assertEquals(
+            "com.example.Envelope.previous is declared as a nullable type parameter and its null bitmap bit is " +
+                "clear, so it holds a value, and its argument's null marker is 01, not 00",
+            e.message,
+        )
     }
 
     @Test
@@ -219,13 +248,77 @@ class SnapshotFormatTest {
             name to RecordSchema(name, listOf(if (i < 65) field("next", "com.example.R%02d".format(i + 1)) else field("value", "kotlin.Long")))
         }
         val writer = assertThrows<IllegalArgumentException> { PersistedSchema.of(type("com.example.R01")) { chain[it] } }
-        assertEquals("com.example.R01 nests 66 levels deep, over the budget of 64", writer.message)
+        assertEquals("com.example.R01 nests deeper than 64 levels, over the budget", writer.message)
         val chainBytes = Bytes.snapshot(
             Bytes.type("com.example.R01"),
             *chain.values.map { record -> Bytes.record(record.typeName, *record.fields.map { it.name to Bytes.type((it.type as SchemaType.ClassType).name) }.toTypedArray()) }.toTypedArray(),
         )
         val reader = assertThrows<MalformedDataException> { PersistedSchema.read(DataInputDeserializer(chainBytes)) }
-        assertEquals("the snapshot holds an invalid schema: com.example.R01 nests 66 levels deep, over the budget of 64", reader.message)
+        assertEquals("the snapshot holds an invalid schema: com.example.R01 nests deeper than 64 levels, over the budget", reader.message)
+
+        // R01(next: R02), ..., R63(value: Long) is 64 levels, the budget.
+        val longest = chain.filterKeys { it <= "com.example.R63" } +
+            ("com.example.R63" to RecordSchema("com.example.R63", listOf(field("value", "kotlin.Long"))))
+        val schema = PersistedSchema.of(type("com.example.R01")) { longest[it] }
+        assertEquals(schema.declarations, PersistedSchema.read(DataInputDeserializer(schema.encoded)).declarations)
+    }
+
+    @Test
+    fun `a chain of declarations far deeper than the budget fails with the diagnostic, on a small stack`() {
+        // R000001(next: R000002), ..., R100000(value: Long): about 5 MB, within the size budget.
+        val length = 100_000
+        fun name(i: Int) = "com.example.R%06d".format(i)
+        val chain = (1..length).associate { i ->
+            name(i) to RecordSchema(name(i), listOf(if (i < length) field("next", name(i + 1)) else field("value", "kotlin.Long")))
+        }
+        fun snapshot(last: Pair<String, ByteArray>) = Bytes.snapshot(
+            Bytes.type(name(1)),
+            *(1 until length).map { Bytes.record(name(it), "next" to Bytes.type(name(it + 1))) }.toTypedArray(),
+            Bytes.record(name(length), last),
+        )
+        val chainBytes = snapshot("value" to Bytes.type("kotlin.Long"))
+        // The same chain closed into a cycle: R100000(next: R000001).
+        val cycleBytes = snapshot("next" to Bytes.type(name(1)))
+        assertTrue(chainBytes.size < PersistedSchema.MAX_SNAPSHOT_BYTES, "${chainBytes.size} bytes")
+
+        // A checker that recursed through the chain would overflow this stack long before its end.
+        onSmallStack {
+            for (bytes in listOf(chainBytes, cycleBytes)) {
+                val reader = assertThrows<MalformedDataException> { PersistedSchema.read(DataInputDeserializer(bytes)) }
+                assertEquals("the snapshot holds an invalid schema: com.example.R000001 nests deeper than 64 levels, over the budget", reader.message)
+            }
+            val writer = assertThrows<IllegalArgumentException> { PersistedSchema.of(type(name(1))) { chain[it] } }
+            assertEquals("com.example.R000001 nests deeper than 64 levels, over the budget", writer.message)
+        }
+    }
+
+    @Test
+    fun `a generic schema's nesting is computed once per declaration, not once per instantiation`() {
+        // D01<T>(a: D02<A<T>>, b: D02<B<T>>, c: D02<C<T>>), ..., Dn<T>(value: T), and A, B and C<T>(value: T). A
+        // D01<Long> nests 2n levels, through 3^(n-1) instantiations of Dn: one per word of A, B and C.
+        fun d(i: Int) = "com.example.D%02d".format(i)
+        val wrappers = listOf("com.example.A", "com.example.B", "com.example.C")
+        val t = SchemaType.TypeParameter("T")
+        fun generic(name: String, argument: SchemaType) = SchemaType.ClassType(name, listOf(SchemaTypeArgument.invariant(argument)))
+        fun declarations(n: Int): Map<String, DeclarationSchema> = (1..n).associate { i ->
+            val fields = if (i < n) {
+                wrappers.map { FieldSchema(it.substringAfterLast('.').lowercase(), generic(d(i + 1), generic(it, t))) }
+            } else {
+                listOf(FieldSchema("value", t))
+            }
+            d(i) to RecordSchema(d(i), fields, listOf("T"))
+        } + wrappers.associateWith { RecordSchema(it, listOf(FieldSchema("value", t)), listOf("T")) }
+        val root = generic(d(1), type("kotlin.Long"))
+
+        assertTimeoutPreemptively(Duration.ofSeconds(60)) {
+            // n = 32 nests 64 levels, the budget.
+            val longest = declarations(32)
+            val deepest = PersistedSchema.of(root) { longest[it] }
+            assertEquals(deepest.declarations, PersistedSchema.read(DataInputDeserializer(deepest.encoded)).declarations)
+            val tooLong = declarations(33)
+            val e = assertThrows<IllegalArgumentException> { PersistedSchema.of(root) { tooLong[it] } }
+            assertEquals("com.example.D01<kotlin.Long> nests deeper than 64 levels, over the budget", e.message)
+        }
     }
 
     @Test
@@ -308,10 +401,19 @@ class SnapshotFormatTest {
     }
 }
 
-private fun DataOutputStream.string(value: String) = RecordFormat.writeString(this, value)
+internal fun DataOutputStream.string(value: String) = RecordFormat.writeString(this, value)
+
+/** Runs [block] on a thread with a 256 KiB stack, and rethrows what it throws. */
+private fun onSmallStack(block: () -> Unit) {
+    var failure: Throwable? = null
+    val thread = Thread(null, { failure = runCatching(block).exceptionOrNull() }, "small stack", 256L * 1024)
+    thread.start()
+    thread.join()
+    failure?.let { throw it }
+}
 
 /** Snapshot data written by hand, for the cases [PersistedSchema.of] refuses to write. */
-private object Bytes {
+internal object Bytes {
     fun of(write: DataOutputStream.() -> Unit): ByteArray = ByteArrayOutputStream().also { DataOutputStream(it).write() }.toByteArray()
 
     fun type(name: String): ByteArray = of { writeByte(1); string(name); writeByte(0); writeInt(0) }

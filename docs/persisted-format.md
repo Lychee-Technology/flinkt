@@ -2,7 +2,7 @@
 
 This document records the bytes Flinkt persists, record format version 1 and snapshot format version 1, and what `restoreSerializer()` returns. It is the decision record for [#5](https://github.com/Lychee-Technology/flinkt/issues/5). Its direction was approved on the issue ([approved decisions](https://github.com/Lychee-Technology/flinkt/issues/5#issuecomment-6872410065)). This document fixes the exact bytes. [schema-evolution.md](schema-evolution.md) records how a restore decides what to do with them, and [architecture.md](architecture.md#persisted-formats) records the collection, ID and key decisions built on them.
 
-Nothing here is implemented yet. KSP generates the codecs in [#11](https://github.com/Lychee-Technology/flinkt/issues/11), the adapters' serializer and snapshot class come in [#12](https://github.com/Lychee-Technology/flinkt/issues/12), and nullable types in [#15](https://github.com/Lychee-Technology/flinkt/issues/15). The evidence is a prototype in the adapters' shared tests, [`adapters/shared/src/test/kotlin/io/flinkt/flink/format`](../adapters/shared/src/test/kotlin/io/flinkt/flink/format), which both PR lanes run, on Flink 2.3.0 and 1.20.5 ([Evidence](#evidence)).
+Nothing here is implemented yet. KSP generates the codecs in [#11](https://github.com/Lychee-Technology/flinkt/issues/11), the adapters' serializer and snapshot class come in [#12](https://github.com/Lychee-Technology/flinkt/issues/12), and nullable types in [#15](https://github.com/Lychee-Technology/flinkt/issues/15). The evidence is a prototype in the adapters' shared tests, [`adapters/shared/src/test/kotlin/io/flinkt/flink/format`](../adapters/shared/src/test/kotlin/io/flinkt/flink/format), which both PR lanes run, on Flink 2.3.0 and 1.20.5, and whose record and string format tests also run on 2.2.1 ([Evidence](#evidence)).
 
 Once a release writes state in these formats, users' checkpoints and savepoints hold it, and every later release has to read it. That's why the format is decided before the first codec is generated, and why it leaves nothing to the output view, the JVM or the locale.
 
@@ -25,7 +25,7 @@ A snapshot whose record format version this release doesn't read is decoded like
 
 ## Records
 
-Record format version 1. Generated codecs write through `java.io.DataOutput` and read through `DataInput`, and mention no Flink type ([Generated code and the adapter](architecture.md#generated-code-and-the-adapter)). They use only `writeByte`, `writeShort`, `writeChar`, `writeInt` and `writeLong`, which write the same bytes on Flink's output views. `RecordFormatTest` checks it on a `DataOutputSerializer` and on a paged view (`AbstractPagedOutputView`), the two views whose floating-point writes differ, on 1.20.5 and 2.3.0. Their bytecode on 2.2.1 is the same as on 2.3.0. `writeFloat`, `writeDouble`, `writeBytes(String)` and `writeUTF` are never used.
+Record format version 1. Generated codecs write through `java.io.DataOutput` and read through `DataInput`, and mention no Flink type ([Generated code and the adapter](architecture.md#generated-code-and-the-adapter)). They use only `writeByte`, `writeShort`, `writeChar`, `writeInt` and `writeLong`, which write the same bytes on Flink's output views. `RecordFormatTest` checks it on a `DataOutputSerializer` and on a paged view (`AbstractPagedOutputView`), the two views whose floating-point writes differ, on 1.20.5, 2.2.1 and 2.3.0. `writeFloat`, `writeDouble`, `writeBytes(String)` and `writeUTF` are never used.
 
 ### Field order
 
@@ -86,9 +86,9 @@ A varint is 7 bits per byte, least significant group first, with the high bit se
 "a" × 127   80 01 61 61 …            the length plus one, 128, takes two bytes
 ```
 
-Generated code doesn't call Flink to write it. `StringFormatTest` compares Flinkt's bytes with `StringValue.writeString`'s over fixed cases, every length where the length's varint grows, a 70,000-char string and 500 random strings of arbitrary UTF-16 code units, on both views. Each reads what the other wrote. `writeString` and `readString` have the same bytecode in 1.20.5, 2.2.1 and 2.3.0.
+Generated code doesn't call Flink to write it. `StringFormatTest` compares Flinkt's bytes with `StringValue.writeString`'s over fixed cases, unpaired surrogates included, every length where the length's varint grows, a 70,000-char string and 500 random strings of arbitrary UTF-16 code units, on both views, on 1.20.5, 2.2.1 and 2.3.0. Each reads what the other wrote.
 
-The format is lossless for every `String`, so two different strings never have the same bytes, which key determinism needs ([Deterministic bytes](#deterministic-bytes)). It has no length limit below `Int.MAX_VALUE - 1` chars. Alternatives:
+The format is lossless for every `String`, so two different strings never have the same bytes, which key determinism needs ([Deterministic bytes](#deterministic-bytes)). A string has at most 67,108,864 chars, 2^26, a budget the writer enforces ([Resource limits](#resource-limits)). The format itself would take up to `Int.MAX_VALUE - 1`. Alternatives:
 
 - **UTF-8 through `String.toByteArray`** writes an unpaired surrogate as `?`, the same byte as `"?"`. `StringFormatTest` checks it.
 - **`writeUTF`** fails on an encoding over 65,535 bytes.
@@ -109,6 +109,14 @@ The choice doesn't rest on speed, and nothing was measured. If #12 finds the per
 - no bitmap at all when the record has no nullable field.
 
 Which fields are nullable is decided by the declaration: a field whose declared type is marked nullable, such as `String?`, `User?` or `T?`. A field declared as a bare type parameter `T` isn't in the bitmap, even when its argument is nullable. Its value is written by the argument's codec, which for a nullable argument writes a marker. A present `T?` field is written by its argument's codec too, so with a nullable argument it has a bitmap bit and then a `01` marker. So a record's layout, bitmap included, depends only on its declaration, never on its type arguments. Whether generic classes are supported is [#22](https://github.com/Lychee-Technology/flinkt/issues/22)'s decision, and if they are, these are their bytes.
+
+A null `T?` field is its set bit, and nothing else. So after a clear bit, a nullable argument's marker is `01`, and every reader, a generated codec and the old-layout serializer alike, fails on `00` there. Accepting it would give a null field a second encoding, which no writer produces. `Box<T>(value: T, previous: T?)`, canonical order `previous`, `value`, with `T` = `User?`:
+
+```text
+Box(value = User(1, "a"), previous = User(2, "b"))    00 | 01 <User(2, "b")> | 01 <User(1, "a")>
+Box(value = null, previous = null)                    01 | 00
+00 | 00 | …                                           malformed: previous's bit is clear, so its marker is 01
+```
 
 **The null marker.** A nullable value anywhere else is one marker byte, then the non-null type's bytes when it isn't null: `00` for null, `01` before a value. Any other marker byte is malformed. That covers a top-level type such as `typeInfo<User?>()`, a `List` element, a `Map` key or value, and the argument of a field declared as `T`. A top-level nullable built-in, such as `typeInfo<String?>()`, wraps Flink's own serializer, so the bytes after `01` are Flink's ([Nested Flink snapshots](#nested-flink-snapshots)).
 
@@ -132,16 +140,43 @@ Byte equality says nothing about a key's hash code or key group. Those depend on
 
 Readers are strict. Bytes that no value encodes fail with an error naming what's wrong, never decode as a value that would be written differently, and never fall back to another serializer:
 
-- a `Boolean` or null marker other than `00` or `01`;
+- a `Boolean` or null marker other than `00` or `01`, and a `00` marker after the clear bitmap bit of a field declared `T?`;
 - a set unused bitmap bit;
 - a `Float` or `Double` NaN other than the canonical one;
 - a string length of `00`, a varint with a redundant last `00` byte, a length varint over 5 bytes or `Int.MAX_VALUE`, a char varint over 3 bytes or U+FFFF;
-- an enum or sealed ID the type doesn't have ([#20](architecture.md#enum-and-sealed-identity)), a negative collection size ([#16](architecture.md#collections));
+- an enum or sealed ID the type doesn't have ([#20](architecture.md#enum-and-sealed-identity)), a negative collection size ([#16](architecture.md#collections)), or a `Map` that holds a key twice;
+- a string or collection over its budget ([Resource limits](#resource-limits));
 - truncated input, as `EOFException`.
 
 Each is one comparison on a path the codec takes anyway. Flink's own readers accept some of these, such as a non-canonical NaN or a non-minimal varint. Nothing Flinkt writes produces them.
 
-A record's nesting is bounded by its schema, which has no cycles, so a codec needs no depth limit. What a corrupt length could make a reader allocate is bounded instead. A string reader starts with at most 8,192 chars and doubles as it reads, so it never holds more than that first chunk or twice what it has read, and a corrupt length fails at the end of the input. `StringFormatTest` reads a length of 2,147,483,646 chars followed by three chars, and measures under 1 MB allocated before the `EOFException`. Flink's `StringValue.readString` allocates the claimed length, when it's over 2,048, before it reads a char. Collection readers (#17) follow the same rule for sizes.
+### Resource limits
+
+A corrupt or hostile input must fail with an error, not exhaust memory, stack or time. Structural checks, above, are always enforced. Resource budgets are limits on legitimate values too, so each one is enforced where the value is written as well as where it's read: a release never writes what it would refuse to read, and a checkpoint it completed stays readable.
+
+| Limit | Version 1 | Written | Read |
+|---|---|---|---|
+| a `String`'s length | 67,108,864 chars, 2^26 | `serialize` fails before writing it | fails at the length, before reading a char |
+| a `List`'s or `Map`'s size | 67,108,864 elements or entries, 2^26 | `serialize` fails before writing the size | fails at the size, before reading an element |
+| nesting | 64 levels ([Validation and budgets](#validation-and-budgets)) | the serializer can't be created | the snapshot is rejected |
+| a type that's written as no bytes | only the serialized type or a sealed subtype | the serializer can't be created | the snapshot is rejected |
+
+The budgets are judgment, not measurement: far beyond what one state value should hold, and small enough that what one corrupt length can claim is bounded. A later release may raise them, never lower them.
+
+**No zero-width elements.** An object, and a record without fields, are written as no bytes. Either one may be the serialized type, or a sealed subtype, whose ID comes first. It can't be a field, a `List` element, a `Map` key or value, or a type argument, with or without `?`. Every other type takes at least a byte: a scalar, a string's length, a collection's size, an enum or sealed ID, a null marker, or a record's bitmap or a field. So every turn of a loop over a collection consumes input, and so does every value a reader visits, except along a chain of nested records, which the nesting budget bounds. Without the rule, a `List<Shutdown>` whose size is corrupt would be four bytes that keep a reader looping, and allocating, for up to 2^26 elements without consuming input, and a schema of records that each hold two of the next, 64 levels deep, would make one value of zero bytes cost about 2^64 visits. The rule is part of the [validation](#validation-and-budgets) the writer and the reader share, so it costs nothing per record. Such a type has one value, so a field of it holds no information.
+
+**What a reader allocates.** Nothing is allocated from a count. A string reader starts with at most 8,192 chars and doubles as it reads, and a collection reader starts with room for at most 1,024 elements and grows as they're read. So a corrupt length or size within its budget fails at the end of the input, having allocated for what it read. Each element and char takes at least a byte, so a decoded value holds at most a constant factor of the bytes it was read from. Flink's `StringValue.readString` allocates the claimed length, when it's over 2,048, before it reads a char.
+
+**What a value can cost.** The work of reading a value is linear in the bytes it consumes, at most 64 levels deep. No budget caps a whole value's size: that would take a counter on every read of every record, a cost the generated codecs don't pay. A value is bounded by what Flink hands the serializer instead: one value's bytes on RocksDB, a state's checkpoint stream on the heap backend. Within that, a corrupt length claims at most its budget.
+
+**Where each limit applies.**
+
+- A generated codec checks each string's length and each collection's size, as it writes and as it reads, one comparison each. Nesting and the zero-width rule are checked once, when its serializer is created, not per record.
+- The snapshot reader applies the [snapshot budgets](#validation-and-budgets), and the same nesting and zero-width checks to the old schema, before a restore uses it.
+- The old-layout serializer (#35) walks the old schema that the snapshot reader accepted, with the codecs' checks and budgets, and allocates nothing for a value it consumes. So its work is linear in the bytes it consumes too.
+- Flink's own framing around a Flinkt value is Flink's, and outside these limits. A `ListState`'s list, for instance, is read by Flink's `ListSerializer` where a backend reads it as one value, and that allocates for the count it reads (checked in 2.3.0).
+
+`ResourceLimitsTest` covers each: a string over its budget fails at its length though every char follows, a collection at its size, and neither is written; corrupt sizes within the budget, nested ones included, allocate under 1 MB before the end of the input; `List<Shutdown>`, a `Map` value, a field and a type argument without bytes are refused by the writer, and `List<Shutdown>` by the reader; and the old-layout walker consumes a byte on every turn of a corrupt `List<Long?>`, allocates nothing, and stops at the budget.
 
 ### Where the codecs live
 
@@ -323,6 +358,7 @@ The writer and the reader run the same checks, so a release never writes a snaps
 - every class type is a built-in, a collection or a declared type, with the number of type arguments it takes, and no star projection;
 - a type parameter is referenced only inside a declaration that declares it, and the root type references none;
 - every declaration is reachable from the root, and none reaches itself. The first release supports no recursive type;
+- an object or a record without fields is only the root type or a sealed subtype ([Resource limits](#resource-limits));
 - a record's field names are unique, and enum and sealed IDs are positive and ascending. A sealed subtype is a declared record, object or sealed type;
 - names aren't empty;
 - an unknown kind, variance, role or critical attribute fails, naming it.
@@ -335,9 +371,11 @@ Corrupt input is also kept from exhausting memory or stack:
 | a name | 65,535 chars | a JVM class file can't hold a longer class, field or type-parameter name |
 | nesting | 64 levels | how deep reading a value recurses, in a codec or in the old-layout serializer walking a removed value: one level per record, collection, value class or sealed type, through type arguments as substituted |
 
-No list is allocated from a count. Each element is read before it's added, and each takes at least a byte, so the size budget bounds every list. The writer enforces the same budgets when a serializer is created, before anything is persisted. A legitimate checkpoint therefore never exceeds them. The numbers are judgment, not measurement. A later release may raise a budget, but never lower one.
+No list is allocated from a count. Each element is read before it's added, and each takes at least a byte, so the size budget bounds every list. A name over its budget fails at its length, before its chars are read. The writer enforces the same budgets when a serializer is created, before anything is persisted. A legitimate checkpoint therefore never exceeds them. The numbers are judgment, not measurement. A later release may raise a budget, but never lower one.
 
-`SnapshotFormatTest` covers each check and budget, unknown kinds and roles, attributes, truncation at every length, and `User`'s snapshot bytes. It also round-trips a schema with every planned shape: a generic record, collections, nullability at several levels, a value class, an enum, nested sealed types and an object.
+The checks themselves are bounded too. Declarations are found and checked one at a time, not by recursion, and one walk from the root checks reachability, cycles and nesting at once. It stops at 64 levels, so it never recurses deeper, however long a chain of declarations the size budget admits. It computes each declaration's nesting once, as a function of its type arguments' nesting, so a generic schema costs linear work however many instantiations a value can hold. A cycle shorter than the budget fails as recursive, and a longer one as too deep.
+
+`SnapshotFormatTest` covers each check and budget, unknown kinds and roles, attributes, truncation at every length, and `User`'s snapshot bytes. A chain of 100,000 declarations, and the same chain closed into a cycle, fail as too deep on a 256 KiB stack, read and written. A generic schema that nests 64 levels through 3^31 instantiations is accepted, and one more level rejected, under a 60-second limit that a walk per instantiation couldn't meet. It also round-trips a schema with every planned shape: a generic record, collections, nullability at several levels, a value class, an enum, nested sealed types and an object.
 
 ### Attributes
 
@@ -383,22 +421,22 @@ These show the format supports what #35 to #38 will build. They don't ship any m
 
 ## Evidence
 
-The prototype is test code in `adapters/shared/src/test/kotlin/io/flinkt/flink/format`. The adapters' shared tests run on both PR lanes, so each test runs against Flink 2.3.0 and 1.20.5:
+The prototype is test code in `adapters/shared/src/test/kotlin/io/flinkt/flink/format`. The adapters' shared tests run on both PR lanes, so each test runs against Flink 2.3.0 and 1.20.5. Flink 2.2 has no adapter yet ([#27](https://github.com/Lychee-Technology/flinkt/issues/27)), so the 2.3 adapter's `flink22FormatTest` compiles `RecordFormatTest`, `StringFormatTest` and the prototype they test against Flink 2.2.1 and runs them on it, and `FormatFlinkLineTest` fails unless they ran on 2.2.1. The adapter's `check` runs it, so the primary PR lane does. #27's adapter replaces it.
 
 ```sh
 ./gradlew :flinkt-flink23:test --tests 'io.flinkt.flink.format.*'
 ./gradlew :flinkt-flink120:test --tests 'io.flinkt.flink.format.*'
+./gradlew :flinkt-flink23:flink22FormatTest
 ```
 
 | Test | Shows |
 |---|---|
-| `RecordFormatTest` | the [examples](#examples) and every scalar at boundary values, with the same bytes on a `DataOutputSerializer` and a paged view; NaN payloads and signed zero; Flink's built-in serializers' bytes; key bytes equal exactly when keys are equal; strict reads |
-| `StringFormatTest` | the string format, byte-equal to `StringValue.writeString` on both views; lossless round trips, unpaired surrogates included; what UTF-8 and `writeUTF` lose; strict reads; bounded allocation |
+| `RecordFormatTest` | the [examples](#examples) and every scalar at boundary values, with the same bytes on a `DataOutputSerializer` and a paged view; NaN payloads and signed zero; Flink's built-in serializers' bytes; key bytes equal exactly when keys are equal; a `T?` field's marker; strict reads. Also on 2.2.1 |
+| `StringFormatTest` | the string format, byte-equal to `StringValue.writeString` on both views; lossless round trips, unpaired surrogates included; what UTF-8 and `writeUTF` lose; strict reads; bounded allocation. Also on 2.2.1 |
+| `ResourceLimitsTest` | the [resource limits](#resource-limits): string and collection budgets on write and read, allocation under corrupt sizes, the zero-width rule, the old-layout walker's work |
 | `CanonicalOrderTest` | reading into locals in canonical order and calling the constructor once, on Kotlin 2.4.0 and 2.4.21; a reorder keeps the bytes and moves the key group |
-| `SnapshotFormatTest` | `User`'s snapshot bytes; every planned shape round-trips; ID order; validation, attributes, budgets, truncation; a schema-driven reader that consumes a value of every planned shape but value classes |
+| `SnapshotFormatTest` | `User`'s snapshot bytes; every planned shape round-trips; ID order; validation, attributes, budgets, truncation; bounded checks on a 100,000-declaration chain and a generic schema; a schema-driven reader that consumes a value of every planned shape but value classes, and rejects a `00` marker in a present `T?` field |
 | `RestorePrototypeTest` | the [restores](#restore), through Flink's versioned snapshot read and a class loader with only the current declaration |
-
-Flink 2.2 has no adapter yet ([#27](https://github.com/Lychee-Technology/flinkt/issues/27)). For 2.2.1, `javap -c` shows that `StringValue.writeString` and `readString`, and the `write*` methods of `DataOutputSerializer` and `AbstractPagedOutputView`, have the same bytecode as in 2.3.0. In 1.20.5, the views' `write*` methods are the same too, except that `DataOutputSerializer` calls its `resize` with `invokespecial` where 2.2.1 and 2.3.0 use `invokevirtual`. 2.2 joins the tests when its adapter does.
 
 What the prototype doesn't show: a real checkpoint or savepoint on either backend, or a restore across adapters. Those are [#12](https://github.com/Lychee-Technology/flinkt/issues/12), [#26](https://github.com/Lychee-Technology/flinkt/issues/26) and [#29](https://github.com/Lychee-Technology/flinkt/issues/29), and testing.md's [snapshot evidence](testing.md#serializer-snapshot-compatibility) applies to them.
 
@@ -407,7 +445,8 @@ What the prototype doesn't show: a real checkpoint or savepoint on either backen
 - **Version 1 is permanent once released.** Until #35's old-layout serializer exists, a change to the record format would make all existing state incompatible. The prototype's tests fix every byte above, and #12 and #15 turn them into golden fixtures of the real codecs, so a change shows up as a failing test, not in a user's restore.
 - **An incompatible state that the job no longer uses still fails the restore** ([Restore](#restore)). That's deliberate, and the error names the state's type, but it can surprise someone who removed the state from the code and expects Flink to drop it.
 - **Shading.** Relocating `io.flinkt` in a job jar changes the snapshot class name in every checkpoint ([The snapshot class](#the-snapshot-class)).
-- **The budgets are judgment.** A schema deeper than 64 levels or larger than 16 MiB fails when its serializer is created, before any state exists. Raising a budget is compatible, and lowering one never is.
+- **The budgets are judgment.** A schema deeper than 64 levels or larger than 16 MiB fails when its serializer is created, before any state exists. A string over 2^26 chars or a collection over 2^26 elements fails when it's written: on RocksDB the state `update()`, on the heap backend the checkpoint. Raising a budget is compatible, and lowering one never is.
+- **No zero-width elements.** An object or a record without fields can't be an element, a field or a type argument ([Resource limits](#resource-limits)). Such a type has one value, so little is lost, but it's a rule users can meet, with an error naming the type.
 - **Strings cost a call per byte** through `DataOutput`, as Flink's `StringValue` does. That's unmeasured. Buffering would keep the bytes.
 
 ## Not decided here

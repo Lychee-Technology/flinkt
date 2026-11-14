@@ -412,7 +412,7 @@ length encoding changed
 
 A golden-byte failure means the persisted representation changed, which may be intended. Either way, the change needs an explicit compatibility decision.
 
-#5's [examples](persisted-format.md#examples) are the first fixtures. Its prototype, in `adapters/shared/src/test/kotlin/io/flinkt/flink/format`, asserts their bytes on both PR lanes, and #12 and #15 move them to the real codecs.
+#5's [examples](persisted-format.md#examples) are the first fixtures. Its prototype, in `adapters/shared/src/test/kotlin/io/flinkt/flink/format`, asserts their bytes on both PR lanes, and on Flink 2.2.1 through the 2.3 adapter's `flink22FormatTest` until #27 adds a 2.2 adapter, and #12 and #15 move them to the real codecs.
 
 A fixture's bytes don't depend on the output view either. A generated codec writes to whichever view the adapter passes, and Flink's views differ ([Generated code and the adapter](architecture.md#generated-code-and-the-adapter)). So each fixture is written through a `DataOutputSerializer` and through a paged view, a subclass of `AbstractPagedOutputView`, and both give the golden bytes. The fixtures include a record with a `Float` and a `Double` NaN whose payload isn't the canonical one. A codec that calls `writeFloat` or `writeDouble` passes that case on a `DataOutputStream` or a `DataOutputSerializer`, and fails it on the paged view.
 

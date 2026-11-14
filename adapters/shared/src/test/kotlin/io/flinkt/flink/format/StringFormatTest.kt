@@ -98,9 +98,11 @@ class StringFormatTest {
 
     @Test
     fun `a corrupt length fails at the end of the input, without allocating for the length it claims`() {
-        // The length plus one is Int.MAX_VALUE, a string of 2,147,483,646 chars, but only three chars follow.
-        // Flink's StringValue.readString allocates an array of the claimed length before it reads a char.
-        val claim = bytes("ff ff ff ff 07 41 41 41")
+        // The length plus one is 67,108,865: a string of 67,108,864 chars, the budget, but only three chars follow.
+        // Flink's StringValue.readString allocates an array of the claimed length before it reads a char. A longer
+        // claim fails at the length (ResourceLimitsTest).
+        assertEquals(1 shl 26, RecordFormat.MAX_STRING_LENGTH)
+        val claim = bytes("81 80 80 20 41 41 41")
         val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
         val before = threads.getThreadAllocatedBytes(Thread.currentThread().id)
         assertThrows<EOFException> { RecordFormat.readString(DataInputDeserializer(claim)) }

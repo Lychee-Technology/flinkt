@@ -94,7 +94,10 @@ class PersistedSchema private constructor(
         /** The budget on a name's length, in UTF-16 chars: a JVM class file can't hold a longer class or field name. */
         const val MAX_NAME_LENGTH: Int = 65_535
 
-        /** The budget on nesting: how deep reading a value recurses through records, collections and type arguments. */
+        /**
+         * The budget on nesting: how deep reading a value recurses through records, collections and type arguments.
+         * Every check of a schema stops at this depth too, so none recurses deeper, however many declarations follow.
+         */
         const val MAX_DEPTH: Int = 64
 
         /** The reserved field attribute for #35's dropped-value marker. Critical: a reader that doesn't know it fails. */
@@ -113,8 +116,11 @@ class PersistedSchema private constructor(
             declarationOf: (String) -> DeclarationSchema?,
         ): PersistedSchema {
             val declarations = sortedMapOf<String, DeclarationSchema>()
+            // Declarations are found through a queue, so a long chain of them doesn't recurse. A type's arguments
+            // recurse, as deep as the nesting budget.
             val pending = ArrayDeque<String>()
-            fun visit(type: SchemaType?) {
+            fun visit(type: SchemaType?, nesting: Int) {
+                require(nesting <= MAX_DEPTH) { "a type nests deeper than $MAX_DEPTH levels" }
                 when (type) {
                     null, is SchemaType.TypeParameter -> Unit
                     is SchemaType.ClassType -> {
@@ -124,12 +130,14 @@ class PersistedSchema private constructor(
                             declarations[type.name] = canonical(declaration)
                             pending += type.name
                         }
-                        type.arguments.forEach { visit(it.type) }
+                        type.arguments.forEach { visit(it.type, nesting + 1) }
                     }
                 }
             }
-            visit(root)
-            while (pending.isNotEmpty()) memberTypes(declarations.getValue(pending.removeFirst())).forEach(::visit)
+            visit(root, nesting = 1)
+            while (pending.isNotEmpty()) {
+                memberTypes(declarations.getValue(pending.removeFirst())).forEach { visit(it, nesting = 1) }
+            }
             val schema = PersistedSchema(RecordFormat.VERSION, role, root, LinkedHashMap(declarations))
             Validator(schema).validate()
             check(schema.encoded.size <= MAX_SNAPSHOT_BYTES) {
@@ -368,12 +376,10 @@ class PersistedSchema private constructor(
         private fun readNames(declaration: String): List<String> =
             readList("type parameters of $declaration") { readName("a type parameter of $declaration") }
 
+        // A name over its budget fails at its length, before a char is read.
         private fun readName(what: String): String {
-            val name = RecordFormat.readString(input)
+            val name = RecordFormat.readString(input, MAX_NAME_LENGTH, what)
             if (name.isEmpty()) throw MalformedDataException("$what is empty")
-            if (name.length > MAX_NAME_LENGTH) {
-                throw MalformedDataException("$what is ${name.length} chars long, over the budget of $MAX_NAME_LENGTH")
-            }
             return name
         }
 
@@ -418,20 +424,25 @@ class PersistedSchema private constructor(
         }
     }
 
-    /** The checks [of] and [read] share. Each failure is an `IllegalArgumentException` naming what's wrong. */
+    /**
+     * The checks [of] and [read] share. Each failure is an `IllegalArgumentException` naming what's wrong.
+     *
+     * Each check is bounded whatever the schema holds: none recurses deeper than [MAX_DEPTH] levels, each declaration
+     * is walked once, and the work is linear in the schema's size, so a snapshot that the size budget admits fails
+     * with a diagnostic, not with a `StackOverflowError` or after a long walk.
+     */
     private class Validator(private val schema: PersistedSchema) {
-        private val depths = HashMap<String, Int>()
-
         fun validate() {
             for (name in schema.declarations.keys) checkName(name)
-            checkType(schema.root, scope = null)
+            checkType(schema.root, scope = null, parameters = emptySet(), takesBytes = false, nesting = 1)
             for (declaration in schema.declarations.values) {
                 checkDeclaration(declaration)
-                for (type in memberTypes(declaration)) checkType(type, declaration)
+                val parameters = declaration.typeParameters.toHashSet()
+                // A subtype's payload follows its ID, so the subtype itself may take no more bytes, as an object does.
+                val takesBytes = declaration !is SealedSchema
+                for (type in memberTypes(declaration)) checkType(type, declaration, parameters, takesBytes, nesting = 1)
             }
-            checkReachableAndAcyclic()
-            val depth = depth(schema.root, emptyMap())
-            require(depth <= MAX_DEPTH) { "${schema.root} nests $depth levels deep, over the budget of $MAX_DEPTH" }
+            Nesting().check()
         }
 
         private fun checkName(name: String) {
@@ -460,18 +471,30 @@ class PersistedSchema private constructor(
             }
         }
 
-        /** [type] is well-formed where it's used: in [scope]'s body, or at the root when [scope] is `null`. */
-        private fun checkType(type: SchemaType, scope: DeclarationSchema?) {
+        /**
+         * [type] is well-formed where it's used: in [scope]'s body, whose type parameters are [parameters], or at the
+         * root when [scope] is `null`. When [takesBytes] is set, its values take at least one byte: it's a field, an
+         * element, a key, a value or a type argument, not the serialized type or a sealed subtype.
+         */
+        private fun checkType(
+            type: SchemaType,
+            scope: DeclarationSchema?,
+            parameters: Set<String>,
+            takesBytes: Boolean,
+            nesting: Int,
+        ) {
+            require(nesting <= MAX_DEPTH) { "a type nests deeper than $MAX_DEPTH levels" }
             when (type) {
-                is SchemaType.TypeParameter -> require(scope != null && type.name in scope.typeParameters) {
+                is SchemaType.TypeParameter -> require(type.name in parameters) {
                     "${type.name} isn't a type parameter of ${scope?.typeName ?: "the serialized type"}"
                 }
                 is SchemaType.ClassType -> {
                     checkName(type.name)
+                    val declaration = schema.declarations[type.name]
                     val expected = when (type.name) {
                         in BUILT_INS -> 0
                         in COLLECTIONS -> COLLECTIONS.getValue(type.name)
-                        else -> schema.declarations[type.name]?.typeParameters?.size
+                        else -> declaration?.typeParameters?.size
                             ?: throw IllegalArgumentException(
                                 "${type.name} is neither a built-in, a collection nor a declaration in the snapshot",
                             )
@@ -479,65 +502,111 @@ class PersistedSchema private constructor(
                     require(type.arguments.size == expected) {
                         "$type has ${type.arguments.size} type arguments, and ${type.name} takes $expected"
                     }
+                    // Every element of a collection then takes at least one byte, so a reader that loops over a size
+                    // consumes input on each turn, and so does every other value but the root's and a subtype's.
+                    require(!takesBytes || !writtenAsNoBytes(declaration)) {
+                        "${scope?.typeName ?: "the serialized type"} uses ${type.name} as a field, an element or a " +
+                            "type argument, and its values are written as no bytes. Only the serialized type or a " +
+                            "sealed subtype may be, so that reading every other value consumes input"
+                    }
                     for (argument in type.arguments) {
                         val argumentType = argument.type
                             ?: throw IllegalArgumentException("$type has a star projection, which has no persisted type")
-                        checkType(argumentType, scope)
+                        checkType(argumentType, scope, parameters, takesBytes = true, nesting = nesting + 1)
                     }
                 }
             }
         }
 
-        private fun checkReachableAndAcyclic() {
-            val state = HashMap<String, Boolean>() // false while on the path, true when done
-            fun visit(name: String, path: List<String>) {
-                when (state[name]) {
-                    true -> return
-                    false -> throw IllegalArgumentException(
-                        "${(path.subList(path.indexOf(name), path.size) + name).joinToString(" -> ")}: recursive " +
-                            "types aren't supported in this release",
-                    )
-                    null -> {
-                        state[name] = false
-                        for (type in memberTypes(schema.declarations.getValue(name))) {
-                            for (referenced in declaredNames(type)) visit(referenced, path + name)
-                        }
-                        state[name] = true
-                    }
-                }
-            }
-            for (name in declaredNames(schema.root)) visit(name, emptyList())
-            val unreachable = schema.declarations.keys - state.keys
-            require(unreachable.isEmpty()) { "the snapshot declares ${unreachable.joinToString()}, which nothing reaches" }
-        }
-
-        private fun declaredNames(type: SchemaType): List<String> = when (type) {
-            is SchemaType.TypeParameter -> emptyList()
-            is SchemaType.ClassType ->
-                listOfNotNull(type.name.takeIf { it in schema.declarations }) +
-                    type.arguments.flatMap { argument -> argument.type?.let(::declaredNames).orEmpty() }
-        }
+        /** An object, or a record without fields. Every other value takes a byte, by the rule [checkType] applies. */
+        private fun writtenAsNoBytes(declaration: DeclarationSchema?): Boolean =
+            declaration is ObjectSchema || declaration is RecordSchema && declaration.fields.isEmpty()
 
         /**
-         * How deep reading a value of [type] recurses: one level per record, collection, value class or sealed type,
-         * through type arguments as substituted. Memoized per instantiation, so a wide schema costs linear work.
+         * Reachability, cycles and the nesting budget, in one walk from the root that stops at [MAX_DEPTH] levels, so
+         * it never recurses deeper, however long a chain of declarations is.
+         *
+         * Nesting counts one level per record, collection, value class, sealed type or built-in, through type
+         * arguments as substituted. A declaration's nesting is a function of its type arguments' nesting:
+         * `max(constant, distance(P) + nesting of P's argument, ...)`, over the type parameters `P` its body uses. Each
+         * declaration's function is computed once, so a generic schema costs linear work however many instantiations
+         * of its declarations a value can hold.
          */
-        private fun depth(type: SchemaType, arguments: Map<String, SchemaType>): Int = when (type) {
-            is SchemaType.TypeParameter -> depth(arguments.getValue(type.name), emptyMap())
-            is SchemaType.ClassType -> {
-                val substituted = substitute(type, arguments)
-                depths.getOrPut(substituted.toString()) {
-                    val argumentDepth = substituted.arguments.maxOfOrNull { depth(it.type!!, emptyMap()) } ?: 0
-                    val declaration = schema.declarations[substituted.name]
-                    val bodyDepth = if (declaration == null) {
-                        0
-                    } else {
-                        val bound = declaration.typeParameters.zip(substituted.arguments.map { it.type!! }).toMap()
-                        memberTypes(declaration).maxOfOrNull { depth(it, bound) } ?: 0
-                    }
-                    1 + maxOf(argumentDepth, bodyDepth)
+        private inner class Nesting {
+            private val bodies = HashMap<String, Body>()
+            private val path = ArrayList<String>()
+            private val onPath = HashSet<String>()
+            private val tooDeep get() = "${schema.root} nests deeper than $MAX_DEPTH levels, over the budget"
+
+            fun check() {
+                val depth = of(schema.root, level = 1).constant
+                require(depth <= MAX_DEPTH) { tooDeep }
+                val unreachable = schema.declarations.keys - bodies.keys
+                require(unreachable.isEmpty()) { "the snapshot declares ${unreachable.joinToString()}, which nothing reaches" }
+            }
+
+            /**
+             * [type]'s nesting, as a function of the type arguments of the declaration it's in. [level] is how deep it
+             * is below the root, at least, so past the budget the root nests too deep, whatever the rest holds.
+             */
+            private fun of(type: SchemaType, level: Int): Depth {
+                require(level <= MAX_DEPTH) { tooDeep }
+                if (type is SchemaType.TypeParameter) return Depth(NONE, mapOf(type.name to 0))
+                type as SchemaType.ClassType
+                val arguments = type.arguments.map { of(checkNotNull(it.type), level + 1) }
+                val depth = Depth.Builder()
+                arguments.forEach { depth.add(it, 0) }
+                schema.declarations[type.name]?.let { declaration ->
+                    val body = body(declaration, level)
+                    depth.add(Depth(body.constant, emptyMap()), 0)
+                    for (k in arguments.indices) if (body.distances[k] != NONE) depth.add(arguments[k], body.distances[k])
+                }
+                // Every argument nests at least one level, so a distance of the budget or more exceeds it.
+                return depth.build(plus = 1).also { result ->
+                    require(result.constant <= MAX_DEPTH && result.distances.values.all { it < MAX_DEPTH }) { tooDeep }
                 }
             }
+
+            private fun body(declaration: DeclarationSchema, level: Int): Body {
+                val name = declaration.typeName
+                bodies[name]?.let { return it }
+                require(onPath.add(name)) {
+                    "${(path.subList(path.indexOf(name), path.size) + name).joinToString(" -> ")}: recursive types " +
+                        "aren't supported in this release"
+                }
+                path.add(name)
+                val depth = Depth.Builder()
+                for (member in memberTypes(declaration)) depth.add(of(member, level + 1), 0)
+                path.removeAt(path.size - 1)
+                onPath.remove(name)
+                val nested = depth.build(plus = 0)
+                val body = Body(
+                    maxOf(nested.constant, 0),
+                    IntArray(declaration.typeParameters.size) { nested.distances[declaration.typeParameters[it]] ?: NONE },
+                )
+                bodies[name] = body
+                return body
+            }
+        }
+
+        /** A declaration body's nesting: [constant], and the distance to each of its type parameters, or [NONE]. */
+        private class Body(val constant: Int, val distances: IntArray)
+    }
+
+    /** A type's nesting as a function of type parameters' nesting: the max of [constant] and each distance plus it. */
+    private class Depth(val constant: Int, val distances: Map<String, Int>) {
+        class Builder {
+            private var constant = NONE
+            private val distances = HashMap<String, Int>()
+
+            fun add(depth: Depth, plus: Int) {
+                if (depth.constant != NONE) constant = maxOf(constant, depth.constant + plus)
+                for ((parameter, distance) in depth.distances) distances.merge(parameter, distance + plus) { a, b -> maxOf(a, b) }
+            }
+
+            /** The depth with [plus] levels on top: one for a class type, none for a declaration's body. */
+            fun build(plus: Int): Depth =
+                Depth(maxOf(constant, 0) + plus, if (plus == 0) distances else distances.mapValues { it.value + plus })
         }
     }
 
@@ -635,6 +704,9 @@ private fun nullable(type: SchemaType): SchemaType = when (type) {
     is SchemaType.ClassType -> SchemaType.ClassType(type.name, type.arguments, isNullable = true)
     is SchemaType.TypeParameter -> SchemaType.TypeParameter(type.name, isNullable = true)
 }
+
+/** No such nesting: a type parameter has no constant part, and a body may not use a type parameter. */
+private const val NONE = -1
 
 private const val CLASS_TYPE = 1
 private const val TYPE_PARAMETER = 2

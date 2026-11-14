@@ -317,7 +317,8 @@ class OldLayoutSerializer<T>(
                 FieldOperation.KEEP ->
                     arguments[constructor.parameterNames.indexOf(field.name)] =
                         if (present) keptReaders.getValue(field.name)(source) else null
-                FieldOperation.REMOVE -> if (present) walker.skipField(field.type, emptyMap(), source)
+                FieldOperation.REMOVE ->
+                    if (present) walker.skipField(field.type, emptyMap(), source, "${oldRecord.typeName}.${field.name}")
             }
         }
         return constructor.construct(arguments)
@@ -377,7 +378,13 @@ fun readBuiltIn(name: String, input: DataInput): Any = when (name) {
 
 /**
  * Consumes values by walking their schema, without their classes: what a migration does with a removed value. It
- * reads every byte with the checks the codecs make, so a malformed value fails here as it would in a codec.
+ * reads every byte with the checks the codecs make, and the same budgets, so a malformed value fails here as it would
+ * in a codec.
+ *
+ * Its work is bounded by the schema's validation (docs/persisted-format.md, "Resource limits"): it recurses at most
+ * [PersistedSchema.MAX_DEPTH] levels, a collection's size is within its budget, and every value but the root's and a
+ * sealed subtype's takes at least one byte, so each turn of a loop over a collection consumes input. It allocates
+ * nothing for the values it skips.
  */
 class SchemaWalker(private val schema: PersistedSchema) {
     /** Consumes a value of [type], a type with no type parameter, outside a record field: nullable means a marker. */
@@ -386,13 +393,22 @@ class SchemaWalker(private val schema: PersistedSchema) {
     }
 
     /**
-     * Consumes the value of a present field whose declared type is [type], in a declaration whose type parameters are
-     * bound to [arguments]. The field's own `?` is the record's null bitmap. A field declared as a type parameter is
-     * written by its argument's codec, so a nullable argument has its marker.
+     * Consumes the value of a present [field] whose declared type is [type], in a declaration whose type parameters
+     * are bound to [arguments]. The field's own `?` is the record's null bitmap. A field declared as a type parameter
+     * is written by its argument's codec, so a nullable argument has its marker. When the field is declared `T?`, its
+     * clear bitmap bit already says it holds a value, so that marker is `01`: `00` would be a second encoding of null.
      */
-    fun skipField(type: SchemaType, arguments: Map<String, SchemaType>, input: DataInput) {
+    fun skipField(type: SchemaType, arguments: Map<String, SchemaType>, input: DataInput, field: String) {
         when (type) {
-            is SchemaType.TypeParameter -> skipValue(arguments.getValue(type.name) as SchemaType.ClassType, input)
+            is SchemaType.TypeParameter -> {
+                val argument = arguments.getValue(type.name) as SchemaType.ClassType
+                if (type.isNullable && argument.isNullable) {
+                    if (!RecordFormat.readNullMarker(input)) throw RecordFormat.nullInPresentField(field)
+                    skipPresent(argument, input)
+                } else {
+                    skipValue(argument, input)
+                }
+            }
             is SchemaType.ClassType -> skipPresent(substitute(type, arguments), input)
         }
     }
@@ -401,8 +417,8 @@ class SchemaWalker(private val schema: PersistedSchema) {
         when (type.name) {
             "kotlin.String" -> RecordFormat.skipString(input)
             in PersistedSchema.BUILT_INS -> readBuiltIn(type.name, input)
-            "kotlin.collections.List" -> repeat(size(input)) { skipValue(type.argument(0), input) }
-            "kotlin.collections.Map" -> repeat(size(input)) {
+            "kotlin.collections.List" -> repeat(RecordFormat.readCollectionSize(input)) { skipValue(type.argument(0), input) }
+            "kotlin.collections.Map" -> repeat(RecordFormat.readCollectionSize(input)) {
                 skipValue(type.argument(0), input)
                 skipValue(type.argument(1), input)
             }
@@ -419,7 +435,7 @@ class SchemaWalker(private val schema: PersistedSchema) {
                 var nullable = 0
                 for (field in fields) {
                     val present = !field.type.isNullable || !nulls[nullable++]
-                    if (present) skipField(field.type, arguments, input)
+                    if (present) skipField(field.type, arguments, input, "${declaration.typeName}.${field.name}")
                 }
             }
             is EnumSchema -> {
@@ -437,12 +453,6 @@ class SchemaWalker(private val schema: PersistedSchema) {
             is ObjectSchema -> Unit
             is ValueClassSchema -> throw UnsupportedOperationException("A value class's bytes are #18's decision")
         }
-    }
-
-    private fun size(input: DataInput): Int {
-        val size = input.readInt()
-        if (size < 0) throw MalformedDataException("a collection size of $size")
-        return size
     }
 
     private fun SchemaType.ClassType.argument(index: Int): SchemaType.ClassType =

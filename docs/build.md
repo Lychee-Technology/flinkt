@@ -21,7 +21,9 @@ Every adapter compiles `adapters/shared/src/main/kotlin` together with its own `
 
 Flink is `compileOnly` in an adapter, because the job's environment supplies it ([Dependency packaging](flink-compatibility.md#dependency-packaging)). The same Flink release is on the adapter's test classpath and on its compile-test classpath, so tests run on the line the adapter was compiled for. `AdapterBuildTest` checks that on each lane.
 
-Adding an adapter, such as #27's `flinkt-flink22`, takes a version in `gradle/libs.versions.toml`, two lines in `settings.gradle.kts`, an `adapters/flinkt-flink22/build.gradle.kts` that applies `flinkt.flink-adapter` and names that version, the line's directory with its `ADAPTER_FLINK_LINE`, a names file from `extractFlinkApi`, an ABI dump from `updateKotlinAbi`, and the line's entry in the per-line differences of `CrossAdapterForwardersTest`. A CI lane for it is a separate decision ([PR CI](#pr-ci)). 2.2 and 2.3 differ in nothing the adapters use yet. If 2.x-only code appears, the per-line directories of 2.2 and 2.3 would duplicate it, and a shared 2.x directory may then be worth adding.
+Adding an adapter, such as #27's `flinkt-flink22`, takes a version in `gradle/libs.versions.toml`, two lines in `settings.gradle.kts`, an `adapters/flinkt-flink22/build.gradle.kts` that applies `flinkt.flink-adapter` and names that version, the line's directory with its `ADAPTER_FLINK_LINE`, a names file from `extractFlinkApi`, an ABI dump from `updateKotlinAbi`, and the line's entry in the per-line differences of `CrossAdapterForwardersTest`. A CI lane for it is a separate decision ([PR CI](#pr-ci)). 2.2 and 2.3 differ in nothing the adapters use yet.
+
+Until #27 does that, the record format's evidence covers 2.2.1 from the 2.3 adapter ([Evidence](persisted-format.md#evidence)). Its build script adds a `flink22Format` source set, which compiles the shared `RecordFormatTest`, `StringFormatTest` and the prototype they test against Flink 2.2.1, and a `flink22FormatTest` task that runs them on it. The source set's own `FormatFlinkLineTest` fails unless they ran on 2.2.1. The adapter's `check` depends on the task, so the primary PR lane runs it. #27 removes it, and its adapter runs the same tests as every other line. If 2.x-only code appears, the per-line directories of 2.2 and 2.3 would duplicate it, and a shared 2.x directory may then be worth adding.
 
 The build logic is in `build-logic/`, as convention plugins: `flinkt.kotlin-jvm` for every module, `flinkt.published` for published modules, `flinkt.flink-adapter` for adapters and `flinkt.compile-tests` for the harness. `build-logic` is an included build, and a task named on the command line doesn't reach one, so the root project's `check` depends on `build-logic`'s. That way `./gradlew build` runs the build logic's own tests too.
 
@@ -68,6 +70,7 @@ Flink's own classes match: 1.20.5's are Java 8 class files (major version 52), a
 | `asm` | 9.11.1 | the newest ASM, which the extraction reads Flink's class files with, and the adapters' structural tests read the views' and Flink's. Build time only |
 | `flink23` | 2.3.0 | the only 2.3 release |
 | `flink120` | 1.20.5 | the newest 1.20 patch |
+| `flink22` | 2.2.1 | the newest 2.2 patch. 2.2 has no adapter yet ([#27](https://github.com/Lychee-Technology/flinkt/issues/27)), so only the 2.3 adapter's `flink22FormatTest` uses it ([Adapters](#adapters)) |
 
 Each adapter compiles and tests against one release of its line. Covering the first and the latest patch of each line is merge and nightly work ([CI compatibility matrix](flink-compatibility.md#ci-compatibility-matrix)). Moving the Kotlin version follows [What CI tests](kotlin-compatibility.md#what-ci-tests), which requires the key-hash checks to pass with every release in between.
 
@@ -130,7 +133,7 @@ Each compilation keeps its sources, generated code and classes under the module'
 
 `.github/workflows/pr.yml` runs two lanes on every pull request and on `main`:
 
-- **Primary**, `./gradlew build -x :flinkt-flink120:check`: every module's compilation, tests, ABI and boundary checks, and the build logic's tests, with the 2.3 adapter as the primary adapter ([Pull requests](testing.md#pull-requests)). The 1.20 adapter still compiles here, but its tests run in its own lane.
+- **Primary**, `./gradlew build -x :flinkt-flink120:check`: every module's compilation, tests, ABI and boundary checks, and the build logic's tests, with the 2.3 adapter as the primary adapter ([Pull requests](testing.md#pull-requests)). The 2.3 adapter's `check` also runs the record format's evidence on Flink 2.2.1 ([Adapters](#adapters)). The 1.20 adapter still compiles here, but its tests run in its own lane.
 - **Flink 1.20**, `./gradlew :flinkt-flink120:check -Pflinkt.test.excludeTags=minicluster`: the shared adapter source compiled against 1.20, with the shared and 1.20 tests, ABI and boundary checks, and no MiniCluster.
 
 A test joins a lane by being in a module the lane builds, so later issues add tests without changing the workflow. A test that starts a MiniCluster is tagged `@Tag("minicluster")`, which keeps it off the 1.20 PR lane. The merge, nightly and release tiers are #28 and #30.
