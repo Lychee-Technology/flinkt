@@ -113,7 +113,7 @@ A failure from `typeInfo` does not silently fall back to Flink's generic/Kryo ty
 <a id="initial-implementation-boundary"></a>
 ## What comes next
 
-The first end-to-end milestone is a `@FlinkType` data class mapped through a view, keyed and processed with typed state, with serializer snapshots that restore state correctly. Generated serializers are intended to avoid reflection on the per-record path. Stable IDs for enum constants and sealed subtypes, and explicit compatibility rules for values and keys, are designed but not implemented. The [schema evolution decision record](docs/schema-evolution.md) separates the target from the stages and evidence still needed to reach it.
+The first end-to-end milestone is a `@FlinkType` data class mapped through a view, keyed and processed with typed state, with serializer snapshots that restore state correctly. Generated serializers are intended to avoid reflection on the per-record path. They will rebuild a data class by calling its primary constructor, so an `init` block may check its arguments but must not change a constructor property. Flinkt can't detect a block that does, and the value would then change on every read and copy. A value must also pass those checks whenever it's written or copied, after a `var` was assigned too: one that doesn't is written without error and then fails every read and copy ([details](docs/architecture.md#rebuilding-through-the-constructor)). Stable IDs for enum constants and sealed subtypes, and explicit compatibility rules for values and keys, are designed but not implemented. The [schema evolution decision record](docs/schema-evolution.md) separates the target from the stages and evidence still needed to reach it.
 
 ## Documentation and contributing
 
