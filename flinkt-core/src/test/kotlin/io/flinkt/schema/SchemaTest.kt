@@ -6,9 +6,11 @@ import io.flinkt.example.User
 import io.flinkt.example.listOfNullableUsers
 import io.flinkt.example.userSchema
 import io.flinkt.registry.TypeRegistry
+import java.time.Duration
 import kotlin.reflect.KVariance
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -48,6 +50,35 @@ class SchemaTest {
     }
 
     @Test
+    fun `a record records its persisted order beside its constructor order, each in its own right`() {
+        // By default, a record is written in constructor order.
+        assertEquals(userSchema.fields, userSchema.persistedFields)
+
+        // An order its properties' @PersistedFieldOrder keys gave it is recorded, not derived from the names.
+        val pinned = RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("name", "id"))
+        assertEquals(listOf("id", "name"), pinned.fields.map { it.name })
+        assertEquals(listOf("name", "id"), pinned.persistedFields.map { it.name })
+        assertNotEquals(userSchema, pinned)
+        assertEquals("record io.flinkt.example.User(id: kotlin.Long, name: kotlin.String) persisted as (name, id)", pinned.toString())
+        assertImmutable(pinned.persistedFields)
+
+        // A constructor reorder that keeps the persisted order changes the constructor order only.
+        val reordered = RecordSchema(userSchema.typeName, userSchema.fields.reversed(), persistedOrder = listOf("id", "name"))
+        assertEquals(userSchema.persistedFields, reordered.persistedFields)
+        assertNotEquals(userSchema, reordered)
+
+        assertMessage("io.flinkt.example.User has 2 fields, and its persisted order names 1") {
+            RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("id"))
+        }
+        assertMessage("io.flinkt.example.User's persisted order names id twice") {
+            RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("id", "id"))
+        }
+        assertMessage("io.flinkt.example.User's persisted order names email, which isn't one of its fields") {
+            RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("id", "email"))
+        }
+    }
+
+    @Test
     fun `a generic declaration refers to its own type parameters only`() {
         val envelope = RecordSchema(
             "com.example.Envelope",
@@ -64,6 +95,24 @@ class SchemaTest {
         }
         assertMessage("com.example.Box has two type parameters named T") {
             ValueClassSchema("com.example.Box", FieldSchema("value", SchemaType.TypeParameter("T")), listOf("T", "T"))
+        }
+    }
+
+    @Test
+    fun `a wide generic declaration is checked in linear time`() {
+        // 300,000 type parameters, and 300,000 uses of the last one: a check that searched the list on each use would
+        // make about 9 * 10^10 comparisons, and a snapshot reader builds these schemas from data it hasn't checked.
+        val count = 300_000
+        val parameters = List(count) { "T$it" }
+        val last = SchemaType.TypeParameter(parameters.last())
+        val wide = SchemaType.ClassType("com.example.Wide", List(count) { SchemaTypeArgument.invariant(last) })
+        assertTimeoutPreemptively(Duration.ofSeconds(60)) {
+            assertEquals(count, RecordSchema("com.example.Wide", List(count) { FieldSchema("f$it", last) }, parameters).fields.size)
+            ValueClassSchema("com.example.WideValue", FieldSchema("value", wide), parameters)
+            SealedSchema("com.example.WideEvent", listOf(SealedSubtypeSchema(1, wide)), parameters)
+        }
+        assertMessage("com.example.Wide refers to a type parameter U it doesn't declare") {
+            RecordSchema("com.example.Wide", listOf(FieldSchema("f", SchemaType.TypeParameter("U"))), parameters)
         }
     }
 

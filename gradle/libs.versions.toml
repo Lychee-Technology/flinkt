@@ -20,6 +20,9 @@ asm = "9.11.1"
 # One Flink release per adapter line. The adapter compiles against it and tests run on it.
 flink23 = "2.3.0"
 flink120 = "1.20.5"
+# Flink 2.2 has no adapter yet (#27). Until it has, the 2.3 adapter compiles and runs the record format's evidence
+# against this release too (docs/build.md#adapters).
+flink22 = "2.2.1"
 junit = "6.1.3"
 
 [libraries]

@@ -23,23 +23,44 @@ public sealed class DeclarationSchema {
 
 /**
  * A class whose value is its primary constructor's properties, such as `data class User(val id: Long, val name: String)`.
+ *
+ * It records two orders of its fields, each in its own right: [fields] in constructor order, and [persistedFields] in
+ * the order a record is written. Neither is derived from the other, so a constructor reorder that keeps the persisted
+ * order keeps the layout, and one that doesn't changes it (docs/persisted-format.md, "Field order").
  */
 public class RecordSchema(
     override val typeName: String,
     /**
      * The persisted fields, in the order of the primary constructor's parameters. That order is how a value is
-     * constructed, and a data class's generated `hashCode()` follows it. The order fields are written in is #5's.
+     * constructed, and a data class's generated `hashCode()` follows it.
      */
     fields: List<FieldSchema>,
     typeParameters: List<String> = emptyList(),
+    /**
+     * The fields' names in the order a record is written: constructor order by default, or the order of the
+     * properties' `@PersistedFieldOrder` keys when they carry one. Each field is named once.
+     */
+    persistedOrder: List<String> = fields.map { it.name },
 ) : DeclarationSchema() {
     public val fields: List<FieldSchema> = fields.immutableCopy()
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
+    /** The persisted fields in the order a record is written, its null bitmap's bits included. */
+    public val persistedFields: List<FieldSchema>
+
     init {
-        validate(typeName, this.typeParameters)
-        requireUnique(this.fields.map { it.name }) { "$typeName has two fields named $it" }
-        this.fields.forEach { requireDeclared(typeName, this.typeParameters, it.type) }
+        val declared = validate(typeName, this.typeParameters)
+        val byName = HashMap<String, FieldSchema>()
+        for (field in this.fields) require(byName.put(field.name, field) == null) { "$typeName has two fields named ${field.name}" }
+        this.fields.forEach { requireDeclared(typeName, declared, it.type) }
+        val order = persistedOrder.immutableCopy()
+        require(order.size == this.fields.size) {
+            "$typeName has ${this.fields.size} fields, and its persisted order names ${order.size}"
+        }
+        requireUnique(order) { "$typeName's persisted order names $it twice" }
+        persistedFields = order.map { name ->
+            byName[name] ?: throw IllegalArgumentException("$typeName's persisted order names $name, which isn't one of its fields")
+        }.immutableCopy()
     }
 
     override fun equals(other: Any?): Boolean =
@@ -47,11 +68,17 @@ public class RecordSchema(
             other is RecordSchema &&
             typeName == other.typeName &&
             typeParameters == other.typeParameters &&
-            fields == other.fields
+            fields == other.fields &&
+            persistedFields == other.persistedFields
 
-    override fun hashCode(): Int = (typeName.hashCode() * 31 + typeParameters.hashCode()) * 31 + fields.hashCode()
+    override fun hashCode(): Int =
+        ((typeName.hashCode() * 31 + typeParameters.hashCode()) * 31 + fields.hashCode()) * 31 + persistedFields.hashCode()
 
-    override fun toString(): String = "record ${declaration(typeName, typeParameters)}(${fields.joinToString()})"
+    /** `record com.example.User(id: kotlin.Long, name: kotlin.String)`, with `persisted as (…)` when the orders differ. */
+    override fun toString(): String {
+        val record = "record ${declaration(typeName, typeParameters)}(${fields.joinToString()})"
+        return if (persistedFields == fields) record else "$record persisted as (${persistedFields.joinToString { it.name }})"
+    }
 }
 
 /** A property of a record or value class: its Kotlin property name and its full type. */
@@ -83,8 +110,7 @@ public class ValueClassSchema(
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
-        validate(typeName, this.typeParameters)
-        requireDeclared(typeName, this.typeParameters, underlying.type)
+        requireDeclared(typeName, validate(typeName, this.typeParameters), underlying.type)
     }
 
     override fun equals(other: Any?): Boolean =
@@ -154,10 +180,10 @@ public class SealedSchema(
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
     init {
-        validate(typeName, this.typeParameters)
+        val declared = validate(typeName, this.typeParameters)
         requireUnique(this.subtypes.map { it.type.name }) { "$typeName lists the subtype $it twice" }
         requireUnique(this.subtypes.map { it.id }) { "$typeName has two subtypes with ID $it" }
-        this.subtypes.forEach { requireDeclared(typeName, this.typeParameters, it.type) }
+        this.subtypes.forEach { requireDeclared(typeName, declared, it.type) }
     }
 
     override fun equals(other: Any?): Boolean =
@@ -210,19 +236,26 @@ public class ObjectSchema(
     override fun toString(): String = "object $typeName"
 }
 
-private fun validate(typeName: String, typeParameters: List<String>) {
+/** Checks a declaration's name and type parameters, and returns the type parameters as a set, for [requireDeclared]. */
+private fun validate(typeName: String, typeParameters: List<String>): Set<String> {
     require(typeName.isNotEmpty()) { "A declaration needs a type name" }
     require(typeParameters.none { it.isEmpty() }) { "A type parameter of $typeName has no name" }
-    requireUnique(typeParameters) { "$typeName has two type parameters named $it" }
+    return requireUnique(typeParameters) { "$typeName has two type parameters named $it" }
 }
 
-private inline fun <T> requireUnique(values: List<T>, message: (T) -> String) {
+/** Requires [values] to be distinct, and returns them as a set. */
+private inline fun <T> requireUnique(values: List<T>, message: (T) -> String): Set<T> {
     val seen = HashSet<T>()
     for (value in values) require(seen.add(value)) { message(value) }
+    return seen
 }
 
-/** Every type parameter that [type] refers to is one of [typeParameters]. */
-private fun requireDeclared(typeName: String, typeParameters: List<String>, type: SchemaType?) {
+/**
+ * Every type parameter that [type] refers to is one of [typeParameters]. They're a set, so a reference costs the same
+ * however many type parameters the declaration has: a snapshot reader builds a schema from data it hasn't checked yet,
+ * and a declaration with `P` type parameters and `F` fields that use them mustn't cost `P * F`.
+ */
+private fun requireDeclared(typeName: String, typeParameters: Set<String>, type: SchemaType?) {
     when (type) {
         null -> Unit
         is SchemaType.TypeParameter ->
