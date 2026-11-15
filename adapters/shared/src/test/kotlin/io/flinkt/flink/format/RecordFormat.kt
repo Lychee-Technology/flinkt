@@ -239,7 +239,7 @@ object RecordFormat {
 
     /**
      * Writes a null bitmap: bit `k` (byte `k / 8`, value `1 shl (k % 8)`) is 1 when the record's `k`-th nullable field,
-     * in canonical order, is null. Generated code writes it with the same calls, from bits it computes inline.
+     * in persisted order, is null. Generated code writes it with the same calls, from bits it computes inline.
      */
     @JvmStatic
     fun writeNullBitmap(output: DataOutput, nulls: BooleanArray) {
