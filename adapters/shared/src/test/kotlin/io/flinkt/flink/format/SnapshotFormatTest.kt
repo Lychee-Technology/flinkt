@@ -158,7 +158,9 @@ class SnapshotFormatTest {
         assertEquals("a map holds the key written as 02 61 twice", e.message)
 
         // Map<Key<Int>?, Map<String, Long>>, with Key<T>(a: T, b: String?, color: Color): a null key, keys with a
-        // bitmap, a type argument and an enum, and inner maps, each with keys of its own.
+        // bitmap, a type argument and an enum, and inner maps, each with keys of its own. A codec refuses an enum
+        // inside a key's record, for its identity hash code (MapKeys), but its bytes are canonical, so the walker,
+        // which compares keys by bytes and never by hash code, compares these exactly.
         val declarations = mapOf(
             "com.example.Key" to RecordSchema(
                 "com.example.Key",

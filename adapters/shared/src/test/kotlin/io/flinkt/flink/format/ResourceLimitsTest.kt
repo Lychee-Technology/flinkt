@@ -1,6 +1,8 @@
 package io.flinkt.flink.format
 
 import io.flinkt.schema.DeclarationSchema
+import io.flinkt.schema.EnumConstantSchema
+import io.flinkt.schema.EnumSchema
 import io.flinkt.schema.FieldSchema
 import io.flinkt.schema.ObjectSchema
 import io.flinkt.schema.RecordSchema
@@ -8,6 +10,7 @@ import io.flinkt.schema.SchemaType
 import io.flinkt.schema.SchemaTypeArgument
 import io.flinkt.schema.SealedSchema
 import io.flinkt.schema.SealedSubtypeSchema
+import io.flinkt.schema.ValueClassSchema
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInput
@@ -215,9 +218,11 @@ class ResourceLimitsTest {
         }
         val root = map(type("kotlin.String"), type("kotlin.Long", nullable = true))
         val walker = SchemaWalker(PersistedSchema.of(root) { null })
-        fun codec(bytes: ByteArray) = RecordFormat.readMap(DataInputDeserializer(bytes), { RecordFormat.readString(it) }) {
-            if (RecordFormat.readNullMarker(it)) RecordFormat.readLong(it) else null
-        }
+        fun codec(bytes: ByteArray) = RecordFormat.readMap(
+            DataInputDeserializer(bytes),
+            { RecordFormat.readString(it) },
+            { if (RecordFormat.readNullMarker(it)) RecordFormat.readLong(it) else null },
+        )
         val distinct = entries()
         assertEquals(keys, codec(distinct).size)
         val input = DataInputDeserializer(distinct)
@@ -229,6 +234,212 @@ class ResourceLimitsTest {
         val e = assertThrows<MalformedDataException> { walker.skipValue(root, DataInputDeserializer(twice)) }
         assertEquals("a map holds the key written as 22 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b … (34 bytes) twice", e.message)
     }
+
+    @Test
+    fun `a map holds at most 1,024 keys that share a hash code, when it's read and when it's written`() {
+        // 16,000 keys Point(i, -31 * i) of a data class with two Int properties, which all hash to 0, each with a
+        // Boolean value: 144,004 bytes. The read fails at the 1,025th key, and reads nothing after it.
+        val count = 16_000
+        assertEquals(0, Point(5, -155).hashCode())
+        val colliding = points(count) { Point(it, -31 * it) }
+        assertEquals(144_004, colliding.size)
+        val input = DataInputDeserializer(colliding)
+        val e = assertThrows<MalformedDataException> { readPoints(input) }
+        assertEquals(
+            "a map holds more than 1024 keys whose hashCode() is 0, such as Point(a=1024, b=-31744), over the budget " +
+                "of 1024 keys per hash code",
+            e.message,
+        )
+        assertEquals(colliding.size - 4 - 1025 * 9, input.available())
+
+        // 1,024 keys with one hash code are within the budget, among keys with other hash codes.
+        val within = points(count) { if (it < 1024) Point(it, -31 * it) else Point(it, it) }
+        assertEquals(count, readPoints(DataInputDeserializer(within)).size)
+
+        // The writer refuses a map one key over the budget before it writes a byte, and writes one at the budget.
+        val output = DataOutputSerializer(16)
+        val over = (0..1024).associate { Point(it, -31 * it) to true }
+        val written = assertThrows<IllegalArgumentException> { writePoints(output, over) }
+        assertEquals(
+            "A Map with more than 1024 keys whose hashCode() is 0, such as Point(a=1024, b=-31744), is over the " +
+                "budget of 1024 keys per hash code, so it can't be persisted",
+            written.message,
+        )
+        assertEquals(0, output.length())
+        val atBudget = (0 until 1024).associate { Point(it, -31 * it) to true }
+        writePoints(output, atBudget)
+        assertEquals(atBudget, readPoints(DataInputDeserializer(output.copyOfBuffer)))
+    }
+
+    @Test
+    fun `the budget bounds the comparisons a map's read makes, which grow with the square of its size without it`() {
+        // Keys that hash as Point does and count the equals() calls the map makes. Without the budget, a read of n
+        // keys with one hash code compares each with every earlier one: n * (n - 1) / 2 calls, and a few per key on
+        // the way down the bin's tree.
+        fun read(bytes: ByteArray, counted: ((CountedKey) -> Boolean)?): Map<CountedKey, Boolean> =
+            RecordFormat.readMap(DataInputDeserializer(bytes), { CountedKey(it.readInt(), it.readInt()) }, RecordFormat::readBoolean, counted)
+        fun comparisons(block: () -> Unit): Long {
+            CountedKey.comparisons = 0
+            block()
+            return CountedKey.comparisons
+        }
+        for (n in listOf(4_000, 8_000, 16_000)) {
+            val unchecked = comparisons { assertEquals(n, read(points(n) { Point(it, -31 * it) }, counted = null).size) }
+            val pairs = n.toLong() * (n - 1) / 2
+            assertTrue(unchecked in pairs until pairs + 64L * n, "an unchecked read of $n keys made $unchecked comparisons")
+        }
+        val colliding = points(16_000) { Point(it, -31 * it) }
+
+        // With the budget, the read fails at the 1,025th key, after about 1,025 * 1,024 / 2.
+        val checked = comparisons { assertThrows<MalformedDataException> { read(colliding) { true } } }
+        assertTrue(checked < 1025L * 1025, "a checked read made $checked comparisons")
+
+        // 16 hash codes with 1,024 keys each are within the budget: each key is compared with at most 1,024 others.
+        val sixteen = points(16 * 1024) { Point(it / 1024 + it % 1024, -31 * (it % 1024)) }
+        val full = comparisons { assertEquals(16 * 1024, read(sixteen) { true }.size) }
+        assertTrue(full < 16L * 1024 * 1024, "16,384 keys at the budget made $full comparisons")
+
+        // Keys that aren't counted, as an enum constant or an object of a sealed key type isn't, don't count toward it.
+        val uncounted = Bytes.of {
+            writeInt(1024 + 3)
+            for (i in 0 until 1024 + 3) { writeInt(i); writeInt(-31 * i); writeByte(1) }
+        }
+        val map = RecordFormat.readMap(
+            DataInputDeserializer(uncounted),
+            { CountedKey(it.readInt(), it.readInt()) },
+            RecordFormat::readBoolean,
+        ) { it.a < 1024 }
+        assertEquals(1024 + 3, map.size)
+    }
+
+    @Test
+    fun `a built-in's keys that share a hash code cost each key a logarithmic number of comparisons, so they aren't counted`() {
+        // HashMap orders keys of a class that's Comparable to itself, as String and the boxed built-ins are, by
+        // compareTo when they share a hash code. 2^14 Strings of "Aa" and "BB", which have one hash code, and keys
+        // that count their comparisons, Comparable but otherwise like CountedKey.
+        val strings = (0 until (1 shl 14)).map { i -> (0 until 14).joinToString("") { if (i shr it and 1 == 0) "Aa" else "BB" } }
+        assertEquals(1, strings.map { it.hashCode() }.toSet().size)
+        val bytes = Bytes.of { writeInt(strings.size); for (s in strings) { string(s); writeByte(1) } }
+        val read = RecordFormat.readMap(DataInputDeserializer(bytes), { RecordFormat.readString(it) }, RecordFormat::readBoolean)
+        assertEquals(strings, read.keys.toList())
+
+        val ordered = points(1 shl 14) { Point(it, -31 * it) }
+        OrderedKey.comparisons = 0
+        val map = RecordFormat.readMap(DataInputDeserializer(ordered), { OrderedKey(it.readInt(), it.readInt()) }, RecordFormat::readBoolean)
+        assertEquals(1 shl 14, map.size)
+        assertTrue(OrderedKey.comparisons < (1L shl 14) * 64, "2^14 ordered keys made ${OrderedKey.comparisons} comparisons")
+    }
+
+    @Test
+    fun `a key's hash code is the same where it's written and where it's read, so no enum or object is inside a record of it`() {
+        // A record's generated hashCode() combines its components' hash codes. An enum constant's is an identity hash
+        // code, which another JVM can compute differently, so a writer's count of such keys isn't its reader's.
+        assertEquals(31 * System.identityHashCode(Color.RED) + 5, Tagged(Color.RED, 5).hashCode())
+
+        val declarations: Map<String, DeclarationSchema> = listOf(
+            EnumSchema("com.example.Color", listOf(EnumConstantSchema("RED", 1))),
+            ObjectSchema("com.example.Dot"),
+            RecordSchema("com.example.Point", listOf(FieldSchema("a", type("kotlin.Int")), FieldSchema("b", type("kotlin.Int")))),
+            RecordSchema("com.example.Circle", listOf(FieldSchema("r", type("kotlin.Int")))),
+            SealedSchema("com.example.Shape", listOf(SealedSubtypeSchema(1, type("com.example.Circle")), SealedSubtypeSchema(2, type("com.example.Dot")))),
+            SealedSchema("com.example.Round", listOf(SealedSubtypeSchema(1, type("com.example.Circle")))),
+            RecordSchema("com.example.Tagged", listOf(FieldSchema("color", type("com.example.Color", nullable = true)), FieldSchema("n", type("kotlin.Int")))),
+            RecordSchema("com.example.Holder", listOf(FieldSchema("shape", type("com.example.Shape")))),
+            RecordSchema("com.example.RoundHolder", listOf(FieldSchema("round", type("com.example.Round")))),
+            RecordSchema("com.example.Box", listOf(FieldSchema("value", SchemaType.TypeParameter("T"))), listOf("T")),
+            RecordSchema("com.example.Listed", listOf(FieldSchema("points", list(type("kotlin.Int"))))),
+            ValueClassSchema("com.example.UserId", FieldSchema("id", type("kotlin.Long"))),
+            ValueClassSchema("com.example.Tag", FieldSchema("color", type("com.example.Color"))),
+            SealedSchema("com.example.Labelled", listOf(SealedSubtypeSchema(1, type("com.example.Tagged")))),
+        ).associateBy { it.typeName }
+        fun counting(key: SchemaType.ClassType) = MapKeys.counting(key) { declarations[it] }
+        fun box(argument: SchemaType) = SchemaType.ClassType("com.example.Box", listOf(SchemaTypeArgument.invariant(argument)))
+
+        for (key in listOf(type("kotlin.String"), type("kotlin.Long", nullable = true), type("com.example.Color"), type("com.example.Color", nullable = true))) {
+            assertEquals(MapKeys.Counting.NONE, counting(key), "$key")
+        }
+        // A record, a value class and a sealed type whose object subtype is the key itself are counted.
+        for (key in listOf(type("com.example.Point"), type("com.example.UserId"), type("com.example.Shape"), type("com.example.RoundHolder"), box(type("com.example.Point")))) {
+            assertEquals(MapKeys.Counting.RECORDS_AND_VALUE_CLASSES, counting(key), "$key")
+        }
+
+        val because = "hashCode() is an identity hash code, which another JVM can compute differently, and a map's keys " +
+            "are counted by hash code where it's written and where it's read. An enum or an object may be the key type " +
+            "itself, or a subtype of a sealed key type"
+        fun rejected(key: SchemaType.ClassType, message: String) {
+            val e = assertThrows<IllegalArgumentException>("$key") { counting(key) }
+            assertEquals(message, e.message)
+        }
+        rejected(type("com.example.Tagged"), "com.example.Tagged can't be a Map key: it holds the enum com.example.Color at com.example.Tagged.color. An enum constant's $because")
+        rejected(type("com.example.Tag"), "com.example.Tag can't be a Map key: it holds the enum com.example.Color at com.example.Tag.color. An enum constant's $because")
+        rejected(box(type("com.example.Color")), "com.example.Box<com.example.Color> can't be a Map key: it holds the enum com.example.Color at com.example.Box.value. An enum constant's $because")
+        rejected(
+            type("com.example.Holder"),
+            "com.example.Holder can't be a Map key: it holds com.example.Dot, an object subtype of com.example.Shape, at com.example.Holder.shape. An object's $because",
+        )
+        rejected(type("com.example.Labelled"), "com.example.Labelled can't be a Map key: it holds the enum com.example.Color at com.example.Tagged.color. An enum constant's $because")
+        rejected(type("com.example.Listed"), "com.example.Listed can't be a Map key: it holds a kotlin.collections.List at com.example.Listed.points, and no key type holds a collection")
+    }
+
+    private data class Point(val a: Int, val b: Int)
+
+    private enum class Color { RED }
+
+    private data class Tagged(val color: Color, val n: Int)
+
+    /** Hashes as [Point] does, and counts the `equals()` calls a map makes. */
+    private class CountedKey(val a: Int, val b: Int) {
+        override fun equals(other: Any?): Boolean {
+            comparisons++
+            return other is CountedKey && other.a == a && other.b == b
+        }
+
+        override fun hashCode(): Int = 31 * a + b
+
+        override fun toString(): String = "CountedKey($a, $b)"
+
+        companion object {
+            var comparisons = 0L
+        }
+    }
+
+    /** [CountedKey], but `Comparable` to itself, so `HashMap` orders keys that share a hash code. */
+    private class OrderedKey(val a: Int, val b: Int) : Comparable<OrderedKey> {
+        override fun compareTo(other: OrderedKey): Int {
+            comparisons++
+            return compareValuesBy(this, other, { it.a }, { it.b })
+        }
+
+        override fun equals(other: Any?): Boolean {
+            comparisons++
+            return other is OrderedKey && other.a == a && other.b == b
+        }
+
+        override fun hashCode(): Int = 31 * a + b
+
+        companion object {
+            var comparisons = 0L
+        }
+    }
+
+    /** A `Map<Point, Boolean>` of [count] keys, each `true`. */
+    private fun points(count: Int, point: (Int) -> Point): ByteArray = Bytes.of {
+        writeInt(count)
+        for (i in 0 until count) {
+            val p = point(i)
+            writeInt(p.a); writeInt(p.b); writeByte(1)
+        }
+    }
+
+    private fun readPoints(input: DataInput): Map<Point, Boolean> =
+        RecordFormat.readMap(input, { Point(it.readInt(), it.readInt()) }, RecordFormat::readBoolean) { true }
+
+    private fun writePoints(output: DataOutputSerializer, map: Map<Point, Boolean>) = RecordFormat.writeMap(
+        output,
+        map,
+        { out, p -> RecordFormat.writeInt(out, p.a); RecordFormat.writeInt(out, p.b) },
+        RecordFormat::writeBoolean,
+    ) { true }
 
     private fun type(name: String, nullable: Boolean = false) = SchemaType.ClassType(name, isNullable = nullable)
 

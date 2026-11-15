@@ -30,6 +30,15 @@ object RecordFormat {
     /** The budget on a `List`'s or a `Map`'s size. A writer refuses a larger collection, and a reader fails at the size. */
     const val MAX_COLLECTION_SIZE: Int = 1 shl 26
 
+    /**
+     * The budget on a `Map`'s counted keys that share one `hashCode()`: keys that are records or value classes, in a map
+     * whose key type is a record, a value class or a sealed type (docs/persisted-format.md, "Keys that share a hash
+     * code"). `HashMap` compares a key of such a class with every earlier key of its hash code, so without the budget
+     * a map's read would be quadratic in its size. A writer refuses a map over it, and a reader fails at the key that's
+     * one too many.
+     */
+    const val MAX_KEYS_PER_HASH_CODE: Int = 1 shl 10
+
     /** A string of up to this many chars is read into one array of its length. A longer one starts there and grows. */
     const val STRING_CHUNK: Int = 8192
 
@@ -309,9 +318,34 @@ object RecordFormat {
         return list
     }
 
-    /** A `Map`: its size, then each entry, key then value, in iteration order (#16). */
+    /**
+     * A `Map`: its size, then each entry, key then value, in iteration order (#16).
+     *
+     * [counted] is `null` when the key type is a built-in or an enum, whose keys aren't counted. Otherwise it says
+     * which keys count toward [MAX_KEYS_PER_HASH_CODE]: every key that's a record or a value class, and no enum
+     * constant, object or `null` ([MapKeys.counting] decides it from the key type). A map over that budget fails
+     * before anything is written, so no release writes a map it would refuse to read.
+     */
     @JvmStatic
-    fun <K, V> writeMap(output: DataOutput, map: Map<K, V>, key: (DataOutput, K) -> Unit, value: (DataOutput, V) -> Unit) {
+    @JvmOverloads
+    fun <K, V> writeMap(
+        output: DataOutput,
+        map: Map<K, V>,
+        key: (DataOutput, K) -> Unit,
+        value: (DataOutput, V) -> Unit,
+        counted: ((K) -> Boolean)? = null,
+    ) {
+        if (counted != null && map.size in (MAX_KEYS_PER_HASH_CODE + 1)..MAX_COLLECTION_SIZE) {
+            val counts = HashCodeCounts()
+            for (k in map.keys) {
+                if (!counted(k)) continue
+                val hash = k.hashCode()
+                require(counts.add(hash) <= MAX_KEYS_PER_HASH_CODE) {
+                    "A Map with more than $MAX_KEYS_PER_HASH_CODE keys whose hashCode() is $hash, such as $k, is " +
+                        "over the budget of $MAX_KEYS_PER_HASH_CODE keys per hash code, so it can't be persisted"
+                }
+            }
+        }
         writeCollectionSize(output, map.size)
         for ((k, v) in map) {
             key(output, k)
@@ -319,17 +353,58 @@ object RecordFormat {
         }
     }
 
-    /** Reads a `Map` [writeMap] wrote, allocating as [readList] does. Two equal keys are malformed (#16). */
+    /**
+     * Reads a `Map` [writeMap] wrote, allocating as [readList] does. Two equal keys are malformed (#16), and so are
+     * more than [MAX_KEYS_PER_HASH_CODE] [counted] keys that share a hash code. [counted] is the writer's.
+     *
+     * Inserting a key into the `LinkedHashMap` compares it with the earlier keys of its hash code, all of them when
+     * its class isn't `Comparable`. The read fails at the first key that makes one hash code's count one too many,
+     * so each insert compares a counted key with at most [MAX_KEYS_PER_HASH_CODE] counted keys, plus the uncounted
+     * ones, at most one per enum constant or object of the key type. Up to [MAX_KEYS_PER_HASH_CODE] keys no hash code
+     * can be over, so a map that size counts nothing. Past it, each counted key's hash code is counted once more.
+     */
     @JvmStatic
-    fun <K, V> readMap(input: DataInput, key: (DataInput) -> K, value: (DataInput) -> V): Map<K, V> {
+    @JvmOverloads
+    fun <K, V> readMap(
+        input: DataInput,
+        key: (DataInput) -> K,
+        value: (DataInput) -> V,
+        counted: ((K) -> Boolean)? = null,
+    ): Map<K, V> {
         val size = readCollectionSize(input)
         val map = LinkedHashMap<K, V>(minOf(size, COLLECTION_CHUNK))
+        var counts: HashCodeCounts? = null
         for (i in 0 until size) {
             val k = key(input)
             map[k] = value(input)
             if (map.size != i + 1) throw MalformedDataException("a map holds the key $k twice")
+            if (counted == null || map.size <= MAX_KEYS_PER_HASH_CODE) continue
+            // The first time the map is larger than the budget, the keys before k are counted, and from then on each
+            // key as it's read. The insert above compared k with at most the budget's keys of its hash code.
+            val table = counts ?: HashCodeCounts().also { first ->
+                counts = first
+                for (earlier in map.keys) if (earlier !== k && counted(earlier)) first.add(earlier.hashCode())
+            }
+            if (counted(k) && table.add(k.hashCode()) > MAX_KEYS_PER_HASH_CODE) {
+                throw MalformedDataException(
+                    "a map holds more than $MAX_KEYS_PER_HASH_CODE keys whose hashCode() is ${k.hashCode()}, such as " +
+                        "$k, over the budget of $MAX_KEYS_PER_HASH_CODE keys per hash code",
+                )
+            }
         }
         return map
+    }
+
+    /**
+     * How many keys have each hash code. Its own lookups stay logarithmic however the hash codes collide: it's keyed
+     * by boxed `Int`s, which are `Comparable`, so `HashMap` orders a bin of them by `compareTo` instead of searching
+     * it. It holds an entry per distinct hash code, so at most a constant factor of the map it counts.
+     */
+    private class HashCodeCounts {
+        private val counts = HashMap<Int, IntArray>()
+
+        /** Counts one more key with [hash], and returns how many there are now. */
+        fun add(hash: Int): Int = ++counts.getOrPut(hash) { IntArray(1) }[0]
     }
 
     /** The marker before a nullable value outside a record field: `00` for null, `01` before a value. */
