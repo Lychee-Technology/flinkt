@@ -6,14 +6,23 @@ import java.io.DataOutput
 
 /*
  * The decision's byte-level examples (docs/persisted-format.md, "Examples"), with codecs written by hand the way KSP
- * will generate them (#11): fields in canonical order, ascending String.compareTo of the property names, each read
- * into a local, then one call of the primary constructor in declaration order. #12 and #15 turn the examples into
- * golden fixtures.
+ * will generate them (#11): fields in persisted order, which is constructor order unless the properties carry
+ * @PersistedFieldOrder, each read into a local, then one call of the primary constructor, by name. #12 and #15 turn
+ * the examples into golden fixtures.
  */
+
+/**
+ * A stand-in for the approved `@PersistedFieldOrder` (docs/persisted-format.md, "Field order"), which #11 adds to
+ * `flinkt-core` with KSP's checks of it. Here it shows the order a hand-written codec follows. flinkt-ksp's
+ * `PersistedFieldOrderTest` tests the checks, with a prototype processor.
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class PersistedFieldOrder(val order: Int)
 
 data class User(val id: Long, val name: String)
 
-/** Canonical order: `id`, `name`. No nullable field, so no bitmap. */
+/** Persisted order: `id`, `name`, the constructor's. No nullable field, so no bitmap. */
 object UserCodec : GeneratedCodec<User> {
     override fun serialize(value: User, output: DataOutput) {
         RecordFormat.writeLong(output, value.id)
@@ -29,7 +38,7 @@ object UserCodec : GeneratedCodec<User> {
     override fun copy(value: User): User = value
 }
 
-/** The nullable variant. Its constructor order isn't its canonical order. */
+/** The nullable variant. */
 data class Account(
     val id: Long,
     val name: String?,
@@ -39,33 +48,33 @@ data class Account(
 )
 
 /**
- * Canonical order: `balance`, `email`, `id`, `name`, `rating`. The nullable fields in that order are `balance`,
- * `email` and `name`: bits 0, 1 and 2 of a one-byte bitmap, which comes first.
+ * Persisted order: `id`, `name`, `email`, `balance`, `rating`, the constructor's. The nullable fields in that order
+ * are `name`, `email` and `balance`: bits 0, 1 and 2 of a one-byte bitmap, which comes first.
  */
 object AccountCodec : GeneratedCodec<Account> {
     override fun serialize(value: Account, output: DataOutput) {
-        val balance = value.balance
-        val email = value.email
         val name = value.name
+        val email = value.email
+        val balance = value.balance
         var nulls = 0
-        if (balance == null) nulls = nulls or 0x01
+        if (name == null) nulls = nulls or 0x01
         if (email == null) nulls = nulls or 0x02
-        if (name == null) nulls = nulls or 0x04
+        if (balance == null) nulls = nulls or 0x04
         output.writeByte(nulls)
-        if (balance != null) RecordFormat.writeDouble(output, balance)
-        if (email != null) RecordFormat.writeString(output, email)
         RecordFormat.writeLong(output, value.id)
         if (name != null) RecordFormat.writeString(output, name)
+        if (email != null) RecordFormat.writeString(output, email)
+        if (balance != null) RecordFormat.writeDouble(output, balance)
         RecordFormat.writeFloat(output, value.rating)
     }
 
     override fun deserialize(input: DataInput): Account {
         val nulls = input.readUnsignedByte()
         if (nulls and 0xf8 != 0) throw MalformedDataException("Account's null bitmap has 3 bits, not ${"%02x".format(nulls)}")
-        val balance = if (nulls and 0x01 != 0) null else RecordFormat.readDouble(input)
-        val email = if (nulls and 0x02 != 0) null else RecordFormat.readString(input)
         val id = RecordFormat.readLong(input)
-        val name = if (nulls and 0x04 != 0) null else RecordFormat.readString(input)
+        val name = if (nulls and 0x01 != 0) null else RecordFormat.readString(input)
+        val email = if (nulls and 0x02 != 0) null else RecordFormat.readString(input)
+        val balance = if (nulls and 0x04 != 0) null else RecordFormat.readDouble(input)
         val rating = RecordFormat.readFloat(input)
         return Account(id = id, name = name, email = email, balance = balance, rating = rating)
     }
@@ -73,10 +82,57 @@ object AccountCodec : GeneratedCodec<Account> {
     override fun copy(value: Account): Account = value
 }
 
+/**
+ * [Account] with `@PersistedFieldOrder` on every property: sparse keys, which give it a persisted order other than
+ * its constructor's. Only their order counts, so renumbering them without changing it changes no byte.
+ */
+data class PinnedAccount(
+    @property:PersistedFieldOrder(order = 30) val id: Long,
+    @property:PersistedFieldOrder(order = 10) val name: String?,
+    @property:PersistedFieldOrder(order = 20) val email: String?,
+    @property:PersistedFieldOrder(order = 99) val balance: Double?,
+    @property:PersistedFieldOrder(order = 0) val rating: Float,
+)
+
+/**
+ * Persisted order: `rating` (0), `name` (10), `email` (20), `id` (30), `balance` (99). The bitmap follows it too:
+ * `name` is bit 0, `email` bit 1 and `balance` bit 2.
+ */
+object PinnedAccountCodec : GeneratedCodec<PinnedAccount> {
+    override fun serialize(value: PinnedAccount, output: DataOutput) {
+        val name = value.name
+        val email = value.email
+        val balance = value.balance
+        var nulls = 0
+        if (name == null) nulls = nulls or 0x01
+        if (email == null) nulls = nulls or 0x02
+        if (balance == null) nulls = nulls or 0x04
+        output.writeByte(nulls)
+        RecordFormat.writeFloat(output, value.rating)
+        if (name != null) RecordFormat.writeString(output, name)
+        if (email != null) RecordFormat.writeString(output, email)
+        RecordFormat.writeLong(output, value.id)
+        if (balance != null) RecordFormat.writeDouble(output, balance)
+    }
+
+    override fun deserialize(input: DataInput): PinnedAccount {
+        val nulls = input.readUnsignedByte()
+        if (nulls and 0xf8 != 0) throw MalformedDataException("PinnedAccount's null bitmap has 3 bits, not ${"%02x".format(nulls)}")
+        val rating = RecordFormat.readFloat(input)
+        val name = if (nulls and 0x01 != 0) null else RecordFormat.readString(input)
+        val email = if (nulls and 0x02 != 0) null else RecordFormat.readString(input)
+        val id = RecordFormat.readLong(input)
+        val balance = if (nulls and 0x04 != 0) null else RecordFormat.readDouble(input)
+        return PinnedAccount(id = id, name = name, email = email, balance = balance, rating = rating)
+    }
+
+    override fun copy(value: PinnedAccount): PinnedAccount = value
+}
+
 /** A record with nested records, one of them nullable. */
 data class Session(val user: User, val note: String?, val previous: User?)
 
-/** Canonical order: `note`, `previous`, `user`. Nested records are written inline, with no length or header. */
+/** Persisted order: `user`, `note`, `previous`. Nested records are written inline, with no length or header. */
 object SessionCodec : GeneratedCodec<Session> {
     override fun serialize(value: Session, output: DataOutput) {
         val note = value.note
@@ -85,24 +141,24 @@ object SessionCodec : GeneratedCodec<Session> {
         if (note == null) nulls = nulls or 0x01
         if (previous == null) nulls = nulls or 0x02
         output.writeByte(nulls)
+        UserCodec.serialize(value.user, output)
         if (note != null) RecordFormat.writeString(output, note)
         if (previous != null) UserCodec.serialize(previous, output)
-        UserCodec.serialize(value.user, output)
     }
 
     override fun deserialize(input: DataInput): Session {
         val nulls = input.readUnsignedByte()
         if (nulls and 0xfc != 0) throw MalformedDataException("Session's null bitmap has 2 bits, not ${"%02x".format(nulls)}")
+        val user = UserCodec.deserialize(input)
         val note = if (nulls and 0x01 != 0) null else RecordFormat.readString(input)
         val previous = if (nulls and 0x02 != 0) null else UserCodec.deserialize(input)
-        val user = UserCodec.deserialize(input)
         return Session(user = user, note = note, previous = previous)
     }
 
     override fun copy(value: Session): Session = value
 }
 
-/** Nine nullable fields, declared out of canonical order: a two-byte bitmap. */
+/** Nine nullable fields: a two-byte bitmap, whose bits follow the persisted order, here the constructor's. */
 data class Wide(
     val i: Boolean?,
     val h: Boolean?,
@@ -115,9 +171,9 @@ data class Wide(
     val a: Boolean?,
 )
 
-/** Canonical order `a` to `i`: bits 0 to 7 of the first bitmap byte, then bit 0 of the second. */
+/** Persisted order `i` to `a`: bits 0 to 7 of the first bitmap byte, then bit 0 of the second. */
 object WideCodec : GeneratedCodec<Wide> {
-    private fun Wide.fields(): List<Boolean?> = listOf(a, b, c, d, e, f, g, h, i)
+    private fun Wide.fields(): List<Boolean?> = listOf(i, h, g, f, e, d, c, b, a)
 
     override fun serialize(value: Wide, output: DataOutput) {
         val fields = value.fields()
@@ -129,15 +185,15 @@ object WideCodec : GeneratedCodec<Wide> {
         val nulls = RecordFormat.readNullBitmap(input, 9)
         val values = Array(9) { if (nulls[it]) null else RecordFormat.readBoolean(input) }
         return Wide(
-            a = values[0], b = values[1], c = values[2], d = values[3], e = values[4],
-            f = values[5], g = values[6], h = values[7], i = values[8],
+            i = values[0], h = values[1], g = values[2], f = values[3], e = values[4],
+            d = values[5], c = values[6], b = values[7], a = values[8],
         )
     }
 
     override fun copy(value: Wide): Wide = value
 }
 
-/** One field of every built-in kind, declared out of canonical order. */
+/** One field of every built-in kind. */
 data class Scalars(
     val z: Boolean,
     val b: Byte,
@@ -150,30 +206,30 @@ data class Scalars(
     val t: String,
 )
 
-/** Canonical order: `b`, `c`, `d`, `f`, `i`, `l`, `s`, `t`, `z`. */
+/** Persisted order: `z`, `b`, `s`, `i`, `l`, `f`, `d`, `c`, `t`, the constructor's. */
 object ScalarsCodec : GeneratedCodec<Scalars> {
     override fun serialize(value: Scalars, output: DataOutput) {
+        RecordFormat.writeBoolean(output, value.z)
         RecordFormat.writeByte(output, value.b)
-        RecordFormat.writeChar(output, value.c)
-        RecordFormat.writeDouble(output, value.d)
-        RecordFormat.writeFloat(output, value.f)
+        RecordFormat.writeShort(output, value.s)
         RecordFormat.writeInt(output, value.i)
         RecordFormat.writeLong(output, value.l)
-        RecordFormat.writeShort(output, value.s)
+        RecordFormat.writeFloat(output, value.f)
+        RecordFormat.writeDouble(output, value.d)
+        RecordFormat.writeChar(output, value.c)
         RecordFormat.writeString(output, value.t)
-        RecordFormat.writeBoolean(output, value.z)
     }
 
     override fun deserialize(input: DataInput): Scalars {
+        val z = RecordFormat.readBoolean(input)
         val b = RecordFormat.readByte(input)
-        val c = RecordFormat.readChar(input)
-        val d = RecordFormat.readDouble(input)
-        val f = RecordFormat.readFloat(input)
+        val s = RecordFormat.readShort(input)
         val i = RecordFormat.readInt(input)
         val l = RecordFormat.readLong(input)
-        val s = RecordFormat.readShort(input)
+        val f = RecordFormat.readFloat(input)
+        val d = RecordFormat.readDouble(input)
+        val c = RecordFormat.readChar(input)
         val t = RecordFormat.readString(input)
-        val z = RecordFormat.readBoolean(input)
         return Scalars(z = z, b = b, s = s, i = i, l = l, f = f, d = d, c = c, t = t)
     }
 
@@ -200,7 +256,7 @@ class NullableCodec<T : Any>(private val inner: GeneratedCodec<T>) : GeneratedCo
 data class Box<T>(val value: T, val previous: T?)
 
 /**
- * Canonical order: `previous`, `value`. Generated once, and given the argument's codec, as #22 would compose it.
+ * Persisted order: `value`, `previous`. Generated once, and given the argument's codec, as #22 would compose it.
  *
  * A present `previous` has a clear bitmap bit, and a nullable argument's codec then writes `01` before it. Reading it,
  * the argument's codec returns `null` only for a `00` marker: a second encoding of null, which no writer produces,
@@ -210,15 +266,15 @@ class BoxCodec<T>(private val argument: GeneratedCodec<T>) : GeneratedCodec<Box<
     override fun serialize(value: Box<T>, output: DataOutput) {
         val previous = value.previous
         output.writeByte(if (previous == null) 0x01 else 0)
-        if (previous != null) argument.serialize(previous, output)
         argument.serialize(value.value, output)
+        if (previous != null) argument.serialize(previous, output)
     }
 
     override fun deserialize(input: DataInput): Box<T> {
         val nulls = input.readUnsignedByte()
         if (nulls and 0xfe != 0) throw MalformedDataException("Box's null bitmap has 1 bit, not ${"%02x".format(nulls)}")
-        val previous = if (nulls and 0x01 != 0) null else argument.deserialize(input) ?: throw RecordFormat.nullInPresentField("Box.previous")
         val value = argument.deserialize(input)
+        val previous = if (nulls and 0x01 != 0) null else argument.deserialize(input) ?: throw RecordFormat.nullInPresentField("Box.previous")
         return Box(value = value, previous = previous)
     }
 

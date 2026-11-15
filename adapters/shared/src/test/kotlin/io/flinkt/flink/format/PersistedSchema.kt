@@ -61,16 +61,15 @@ class PersistedSchema private constructor(
 
     /**
      * Whether [other] describes the same persisted layout with the same identities: the same record format version,
-     * root and declarations. The role isn't compared, because it says what the serializer was used for, not how its
-     * bytes look. Constructor order is compared only when [compareConstructorOrder] is set: it doesn't decide bytes.
+     * root and declarations, each record with the same fields in the same persisted order. The role isn't compared,
+     * because it says what the serializer was used for, not how its bytes look, and neither is a record's
+     * constructor order, which decides no byte. [Planner] checks those.
      */
-    fun sameLayout(other: PersistedSchema, compareConstructorOrder: Boolean): Boolean =
+    fun sameLayout(other: PersistedSchema): Boolean =
         recordFormatVersion == other.recordFormatVersion &&
             root == other.root &&
             declarations.keys == other.declarations.keys &&
-            declarations.all { (name, declaration) ->
-                sameDeclaration(declaration, other.declarations.getValue(name), compareConstructorOrder)
-            }
+            declarations.all { (name, declaration) -> sameLayout(declaration, other.declarations.getValue(name)) }
 
     override fun toString(): String =
         "PersistedSchema(record format $recordFormatVersion, $role, $root, ${declarations.values.joinToString()})"
@@ -108,7 +107,8 @@ class PersistedSchema private constructor(
          * [declarationOf] looks up by name, as a registry does through the job's class loader.
          *
          * Enum constants and sealed subtypes are kept in ascending ID order, so a source reorder changes neither the
-         * records nor the snapshot. A record's fields stay in constructor order, which the snapshot records.
+         * records nor the snapshot. A record keeps both of its orders, each recorded in its own right: its persisted
+         * order, which its bytes follow, and its constructor order.
          */
         fun of(
             root: SchemaType.ClassType,
@@ -181,11 +181,13 @@ class PersistedSchema private constructor(
             else -> declaration
         }
 
-        private fun sameDeclaration(a: DeclarationSchema, b: DeclarationSchema, compareConstructorOrder: Boolean): Boolean =
-            if (a is RecordSchema && b is RecordSchema && !compareConstructorOrder) {
-                a.typeName == b.typeName &&
-                    a.typeParameters == b.typeParameters &&
-                    a.fields.sortedBy { it.name } == b.fields.sortedBy { it.name }
+        /**
+         * Whether [a] and [b] are written alike: equal, except that two records may differ in constructor order.
+         * `null` is a declaration that one schema doesn't have.
+         */
+        fun sameLayout(a: DeclarationSchema?, b: DeclarationSchema?): Boolean =
+            if (a is RecordSchema && b is RecordSchema) {
+                a.typeName == b.typeName && a.typeParameters == b.typeParameters && a.persistedFields == b.persistedFields
             } else {
                 a == b
             }
@@ -207,8 +209,13 @@ class PersistedSchema private constructor(
             when (declaration) {
                 is RecordSchema -> {
                     writeNames(declaration.typeParameters)
+                    output.writeInt(declaration.persistedFields.size)
+                    declaration.persistedFields.forEach(::writeField)
+                    // The constructor order, as each field's position in the persisted order.
+                    val position = HashMap<String, Int>()
+                    declaration.persistedFields.forEachIndexed { index, field -> position[field.name] = index }
                     output.writeInt(declaration.fields.size)
-                    declaration.fields.forEach(::writeField)
+                    for (field in declaration.fields) output.writeInt(position.getValue(field.name))
                 }
                 is ValueClassSchema -> {
                     writeNames(declaration.typeParameters)
@@ -306,8 +313,8 @@ class PersistedSchema private constructor(
             val declaration = when (kind) {
                 RECORD -> {
                     val typeParameters = readNames(name)
-                    val fields = readList({ "fields of $name" }) { readField(name) }
-                    RecordSchema(name, fields, typeParameters)
+                    val persisted = readList({ "fields of $name" }) { readField(name) }
+                    RecordSchema(name, readConstructorOrder(name, persisted), typeParameters, persisted.map { it.name })
                 }
                 VALUE_CLASS -> {
                     val typeParameters = readNames(name)
@@ -354,6 +361,27 @@ class PersistedSchema private constructor(
             val field = FieldSchema(name, readType(depth = 1))
             readAttributes { "$declaration.$name" }
             return field
+        }
+
+        /**
+         * A record's constructor order: each field's position in [persisted], once each. Its count is the number of
+         * fields already read, so what it allocates is bounded by the input it consumed.
+         */
+        private fun readConstructorOrder(declaration: String, persisted: List<FieldSchema>): List<FieldSchema> {
+            val count = readCount { "the constructor order of $declaration" }
+            if (count != persisted.size) {
+                throw MalformedDataException("$declaration has ${persisted.size} fields, and its constructor order names $count")
+            }
+            val seen = BooleanArray(count)
+            return List(count) {
+                val position = input.readInt()
+                if (position !in 0 until count) {
+                    throw MalformedDataException("$declaration's constructor order names field $position of $count")
+                }
+                if (seen[position]) throw MalformedDataException("$declaration's constructor order names field $position twice")
+                seen[position] = true
+                persisted[position]
+            }
         }
 
         private fun readType(depth: Int): SchemaType {

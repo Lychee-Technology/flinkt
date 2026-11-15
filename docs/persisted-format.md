@@ -1,6 +1,6 @@
 # Persisted format
 
-This document records the bytes Flinkt persists, record format version 1 and snapshot format version 1, and what `restoreSerializer()` returns. It is the decision record for [#5](https://github.com/Lychee-Technology/flinkt/issues/5). Its direction was approved on the issue ([approved decisions](https://github.com/Lychee-Technology/flinkt/issues/5#issuecomment-6872410065)). This document fixes the exact bytes. [schema-evolution.md](schema-evolution.md) records how a restore decides what to do with them, and [architecture.md](architecture.md#persisted-formats) records the collection, ID and key decisions built on them.
+This document records the bytes Flinkt persists, record format version 1 and snapshot format version 1, and what `restoreSerializer()` returns. It is the decision record for [#5](https://github.com/Lychee-Technology/flinkt/issues/5). Its direction was approved on the issue ([approved decisions](https://github.com/Lychee-Technology/flinkt/issues/5#issuecomment-6872410065)), and its field order by a later amendment, which replaced name order with constructor order and an explicit `@PersistedFieldOrder` ([superseding decision](https://github.com/Lychee-Technology/flinkt/issues/5#issuecomment-6886645867)). This document fixes the exact bytes. [schema-evolution.md](schema-evolution.md) records how a restore decides what to do with them, and [architecture.md](architecture.md#persisted-formats) records the collection, ID and key decisions built on them.
 
 Nothing here is implemented yet. KSP generates the codecs in [#11](https://github.com/Lychee-Technology/flinkt/issues/11), the adapters' serializer and snapshot class come in [#12](https://github.com/Lychee-Technology/flinkt/issues/12), and nullable types in [#15](https://github.com/Lychee-Technology/flinkt/issues/15). The evidence is a prototype in the adapters' shared tests, [`adapters/shared/src/test/kotlin/io/flinkt/flink/format`](../adapters/shared/src/test/kotlin/io/flinkt/flink/format), which both PR lanes run, on Flink 2.3.0 and 1.20.5, and whose record and string format tests also run on 2.2.1 ([Evidence](#evidence)).
 
@@ -29,19 +29,35 @@ Record format version 1. Generated codecs write through `java.io.DataOutput` and
 
 ### Field order
 
-A record's fields are written in ascending `String.compareTo` order of their Kotlin property names, the names the schema records (`FieldSchema.name`). That order compares UTF-16 code units, so it's the same in every JVM and every locale. It's also the order `PojoTypeInfo` sorts a POJO's fields in (`Field.getName().compareTo`, checked in the 2.3.0 bytecode).
+A record's fields are written in its **persisted order**. By default that's the primary constructor's order. A record can set another one with `@PersistedFieldOrder` on its properties, the API the [amendment](https://github.com/Lychee-Technology/flinkt/issues/5#issuecomment-6886645867) approved:
 
-A field is identified by its name, so a pure source reorder writes the same bytes. `Account(id, name, email, balance, rating)` is written as `balance`, `email`, `id`, `name`, `rating`.
+```kotlin
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.BINARY)
+annotation class PersistedFieldOrder(val order: Int)
+```
 
-A generated codec reads each field into a local in that order, then calls the primary constructor once, in declaration order. Construction is ordinary construction: an `init` block runs once and sees every argument, so a check across fields works. `CanonicalOrderTest` decodes `Key(a, b)` and the reordered `Key(b, a)` from the same bytes, compiled by Kotlin 2.4.0 and 2.4.21, and an `init` block that compares `a` with `b` passes or fails as it would for a direct call.
+- **All or none.** If one primary-constructor property of a `@FlinkType` record carries `@property:PersistedFieldOrder(order = N)`, every one does. The fields are then written in ascending order of their keys.
+- **Keys are unique and non-negative, and may have gaps.** They only sort: keys `0, 10, 20` and `3, 7, 1000` give the same order, the same bytes and the same snapshot. A key isn't a field's identity, isn't written in a record and isn't recorded in the snapshot. A field is still identified by its name ([Type identity](#type-identity)).
+- **KSP rejects** an annotation on some of a record's properties and not the others, a negative key, a key that two properties share, and an annotation on a property that isn't persisted: one declared in the class body, a top-level property, a property of a class that isn't a `@FlinkType`, and the property of a value class, which is written as its underlying value (#18) and has no field order. Each error is located at the declaration and names it. #11 implements the checks, with the annotation in `flinkt-core`. `PersistedFieldOrderTest`, in `flinkt-ksp`, runs a prototype processor of them.
+
+`Account(id, name, email, balance, rating)` is written as `id`, `name`, `email`, `balance`, `rating`. With the keys `rating = 0`, `name = 10`, `email = 20`, `id = 30` and `balance = 99`, it's written as `rating`, `name`, `email`, `id`, `balance` ([Examples](#examples)). The null bitmap follows the persisted order too ([Null representation](#null-representation)).
+
+A generated codec reads each field into a local in persisted order, then calls the primary constructor once, with each argument by name. Construction is ordinary construction: an `init` block runs once and sees every argument, so a check across fields works. `PersistedOrderTest` decodes `Key(a, b)` and the reordered `Key(b, a)`, with and without keys, compiled by Kotlin 2.4.0 and 2.4.21, and an `init` block that compares `a` with `b` passes or fails as it would for a direct call.
+
+**The snapshot records both orders, each in its own right** ([Content](#content)): the persisted order, which is the record's layout, and the constructor order, which a data class's generated `hashCode()` follows. Neither is derived from the other, or from the names. So a restore can tell the two kinds of reorder apart:
+
+- **Without keys, a constructor reorder reorders the layout.** `PersistedOrderTest` writes `Key(a = 1, b = 2)` as `00 00 00 01 00 00 00 02`, and after a reorder to `Key(b, a)` as `00 00 00 02 00 00 00 01`. A change of persisted order is a field permutation, which version 1 has no migration for, so it's incompatible in every role until a separately reviewed and tested permutation stage lands ([Restore](#restore)). To reorder a constructor and keep the layout, a user first gives every property a key in the old order. The planner's diagnostic says so.
+- **With keys that keep the persisted order, only the constructor order changes.** The bytes stay `00 00 00 01 00 00 00 02`, but `Key(a = 1, b = 2)` hashes to 33 before and 63 after, and Flink's `KeyGroupRangeAssignment` files it under key group 29 before and 44 after, at max parallelism 128. So the change is as-is for a value and for a map key, and incompatible for a partition key, whose key groups follow `hashCode()` ([#32](https://github.com/Lychee-Technology/flinkt/issues/32)), and for a record under a `Map` key, whose keys a codec counts by hash code ([Keys that share a hash code](#resource-limits)).
+
+Renumbering keys without changing their order changes nothing a restore sees.
 
 Alternatives:
 
-- **Constructor order** would change the bytes on a reorder, which [#25](schema-evolution.md#values) rules out.
-- **A `Collator`** depends on the locale.
-- **Code-point order** differs from `compareTo` only for names that mix supplementary characters with characters from U+E000 to U+FFFF, and gains nothing.
-
-Constructor order still matters to a partition key, because a data class's generated `hashCode()` follows it. `CanonicalOrderTest` shows `Key(a = 1, b = 2)` and its reordered declaration writing `00 00 00 01 00 00 00 02` both times, and Flink's `KeyGroupRangeAssignment` filing them under key groups 29 and 44 at max parallelism 128. So the snapshot records constructor order ([Content](#content)).
+- **Ascending `String.compareTo` order of the property names**, which this decision first chose, kept a reorder's bytes without an annotation. It made the layout follow something the declaration doesn't show, and made every reorder's safety implicit. Constructor order is what the declaration shows, and keeping a layout across a reorder becomes an explicit choice, made with the annotation.
+- **Field IDs in each record, or a header,** would let a reader find a field by ID, at a cost in every record, which the README's trade-off rules out.
+- **Recording the keys in the snapshot** would make a renumbering a schema change, though no byte changes. The snapshot records the order they give.
+- **Recording only one order and deriving the other** can't work either way. The persisted order can't be derived from the constructor order once keys exist, and the constructor order, which decides a partition key's key groups, can't be derived from the persisted order.
 
 ### No header
 
@@ -101,7 +117,7 @@ The choice doesn't rest on speed, and nothing was measured. If #12 finds the per
 
 **The null bitmap.** A record with nullable fields starts with a bitmap, before any field:
 
-- one bit per nullable field, in canonical field order restricted to the nullable fields;
+- one bit per nullable field, in persisted order restricted to the nullable fields;
 - `ceil(n / 8)` bytes for `n` nullable fields;
 - bit `k` is in byte `k / 8`, as the value `1 shl (k % 8)`: least significant bit first;
 - `1` means null and `0` present. A null field has no bytes after the bitmap;
@@ -110,12 +126,12 @@ The choice doesn't rest on speed, and nothing was measured. If #12 finds the per
 
 Which fields are nullable is decided by the declaration: a field whose declared type is marked nullable, such as `String?`, `User?` or `T?`. A field declared as a bare type parameter `T` isn't in the bitmap, even when its argument is nullable. Its value is written by the argument's codec, which for a nullable argument writes a marker. A present `T?` field is written by its argument's codec too, so with a nullable argument it has a bitmap bit and then a `01` marker. So a record's layout, bitmap included, depends only on its declaration, never on its type arguments. Whether generic classes are supported is [#22](https://github.com/Lychee-Technology/flinkt/issues/22)'s decision, and if they are, these are their bytes.
 
-A null `T?` field is its set bit, and nothing else. So after a clear bit, a nullable argument's marker is `01`, and every reader, a generated codec and the old-layout serializer alike, fails on `00` there. Accepting it would give a null field a second encoding, which no writer produces. `Box<T>(value: T, previous: T?)`, canonical order `previous`, `value`, with `T` = `User?`:
+A null `T?` field is its set bit, and nothing else. So after a clear bit, a nullable argument's marker is `01`, and every reader, a generated codec and the old-layout serializer alike, fails on `00` there. Accepting it would give a null field a second encoding, which no writer produces. `Box<T>(value: T, previous: T?)`, persisted order `value`, `previous`, with `T` = `User?`:
 
 ```text
-Box(value = User(1, "a"), previous = User(2, "b"))    00 | 01 <User(2, "b")> | 01 <User(1, "a")>
+Box(value = User(1, "a"), previous = User(2, "b"))    00 | 01 <User(1, "a")> | 01 <User(2, "b")>
 Box(value = null, previous = null)                    01 | 00
-00 | 00 | …                                           malformed: previous's bit is clear, so its marker is 01
+00 | 00 | 00                                          malformed: previous's bit is clear, so its marker is 01
 ```
 
 **The null marker.** A nullable value anywhere else is one marker byte, then the non-null type's bytes when it isn't null: `00` for null, `01` before a value. Any other marker byte is malformed. That covers a top-level type such as `typeInfo<User?>()`, a `List` element, a `Map` key or value, and the argument of a field declared as `T`. A top-level nullable built-in, such as `typeInfo<String?>()`, wraps Flink's own serializer, so the bytes after `01` are Flink's ([Nested Flink snapshots](#nested-flink-snapshots)).
@@ -179,19 +195,23 @@ So version 1 has a budget: in a `Map` whose key type is a record, a value class 
 
 The writer counts with the hash codes of the JVM that writes the map, and the reader with those of the JVM that reads it, so a key's hash code has to be the same in both. A record's or value class's generated `hashCode()` combines its components' hash codes, which Java SE specifies for the built-ins, with a formula that every supported Kotlin compiler shares ([Key identity across compiler versions](kotlin-compatibility.md#key-identity-across-compiler-versions)). An enum constant's or a plain object's hash code is an identity hash code, which depends on what the JVM did before ([testing.md](testing.md#comparator-and-key-semantics)): `Tagged(color: Color, n: Int)` hashes to `31 * System.identityHashCode(color) + n`. So a `Map` key type can't hold an enum, or a sealed type with an object subtype, inside a record or a value class ([Map keys](architecture.md#map-keys)). An enum constant or an object can still be the key itself, as the key type or a subtype of a sealed key type, where it isn't counted. The prototype's `MapKeys` decides which keys a codec counts, and rejects the rest, from the key type when the codec is created.
 
+**The budget holds across every as-is change.** A map that a release wrote within the budget has to stay readable after any change a restore accepts as-is. So no as-is change may alter a counted key's hash code. The components' hash codes are specified, and the formula is pinned across compilers, but a data class combines them in constructor order. A constructor reorder of a record under a `Map` key, persisted order kept, would turn 1,025 keys `Key(-31 * i, i)`, whose hash codes `31 * a + b` are all different, into keys whose hash codes `31 * b + a` are all 0. The old release wrote that map, 9,229 bytes, and the current codec fails its read at the 1,025th key. No reader can tell such a map from a hostile one: both have 1,025 keys of one hash code, and building the `LinkedHashMap` costs the same for either. So that reorder isn't as-is. The planner finds every record a `Map` key type holds, as the key or at any depth inside it, and fails the restore on a constructor reorder of one, before anything is read ([Restore](#restore)). In a value outside a map key, and in the map-key role, the same reorder stays as-is, because nothing there is counted: the heap backend and broadcast state rebuild their own maps with the restoring JVM's hash codes, and RocksDB finds an entry by its bytes.
+
+**The key check is linear in the schema.** Which keys a codec counts, and which key types it rejects, is decided from the key type, which may be generic: `D01<Long>`, whose declarations each hold three instantiations of the next, holds 3^30 instantiations at 31 levels. `MapKeys` never substitutes an argument into a declaration. It checks each declaration once, as a function of its type arguments: what it holds whatever they are, and which type parameters' arguments are components of it, with a path to each. A use of the declaration then checks only those arguments, where they're written. So the work and what it allocates are linear in the schema's size, as the snapshot's nesting check is ([Validation and budgets](#validation-and-budgets)), and a failure still names the path to the enum or object it found.
+
 The budget is judgment, not measurement. A dense grid of `Key(x, y)` over 8,192 × 8,192 points, the size budget, puts at most 265 keys under one hash code, and 1,024 leaves a margin above that. As with the other budgets, a later release may raise it, never lower it.
 
 **What a value can cost.** The work of reading a value is linear in the bytes it consumes, at most 64 levels deep, apart from a `Map`'s keys, and those are bounded: each is compared with at most 1,024 keys of its hash code, plus the uncounted keys and a logarithmic number of others. No budget caps a whole value's size: that would take a counter on every read of every record, a cost the generated codecs don't pay. A value is bounded by what Flink hands the serializer instead: one value's bytes on RocksDB, a state's checkpoint stream on the heap backend. Within that, a corrupt length claims at most its budget.
 
 **Where each limit applies.**
 
-- A generated codec checks each string's length and each collection's size, as it writes and as it reads, one comparison each. It counts a map's keys by hash code once the map has more than 1,024. Nesting, the zero-width rule and which keys are counted are decided once, when its serializer is created, not per record.
+- A generated codec checks each string's length and each collection's size, as it writes and as it reads, one comparison each. It counts a map's keys by hash code once the map has more than 1,024. Nesting, the zero-width rule and which keys are counted are decided once, when its serializer is created, not per record, in time linear in the schema.
 - The snapshot reader applies the [snapshot budgets](#validation-and-budgets), and the same nesting and zero-width checks to the old schema, before a restore uses it.
 - The old-layout serializer (#35) walks the old schema that the snapshot reader accepted, with the codecs' checks and budgets. It prepares each declaration once, so no value costs work for its schema's width: it looks a type argument up in the scope where it was written instead of substituting it, and finds an enum or sealed ID by binary search. So its work is linear in the bytes it consumes too, apart from a removed `Map`'s keys, below.
 - To reject a removed `Map` that holds a key twice, as a codec does, the old-layout serializer compares keys by their bytes, because it has no key class. That's exact: a key's equality depends only on what's written ([Map keys](architecture.md#map-keys)), and each encoding is canonical, so two keys are equal exactly when their bytes are ([Deterministic bytes](#deterministic-bytes)). A key that holds a `List` or a `Map` fails, because no key type holds one, and a `Map`'s bytes follow its iteration order. The keys' bytes are the only thing it keeps for a value it consumes, until the map ends, in a set ordered by those bytes. That's a constant factor of the bytes it consumed, as a codec's decoded map is. Each key costs at most `log2` of the map's size in comparisons, 26 at the budget, whatever the keys are, because the set uses no hash code that keys could be written to share. Without the key class it can't count a removed map's keys by hash code, and it doesn't need to, so it consumes a removed map that a codec would refuse for its hash codes, which no release wrote. Nor does it need the rule on enums and objects inside a key's records, which is about hash codes: their bytes are canonical too, so it compares those keys exactly. A `Map` it builds as part of a current value is built as a codec builds one, budget included.
 - Flink's own framing around a Flinkt value is Flink's, and outside these limits. A `ListState`'s list, for instance, is read by Flink's `ListSerializer` where a backend reads it as one value, and that allocates for the count it reads (checked in 2.3.0).
 
-`ResourceLimitsTest` covers each: a string over its budget fails at its length though every char follows, a collection at its size, and neither is written; a map with 1,025 keys of one hash code fails at the last of them and isn't written, the read's comparisons are those above, and `MapKeys` counts and rejects the key types above; corrupt sizes within the budget, nested ones included, allocate under 1 MB before the end of the input; `List<Shutdown>`, a `Map` value, a field and a type argument without bytes are refused by the writer, and `List<Shutdown>` by the reader; the old-layout walker consumes a byte on every turn of a corrupt `List<Long?>`, allocates nothing, and stops at the budget; a corrupt `Map<Int, Long?>` makes it keep under 64 times the bytes it consumed; and it finds a key that's there twice after 65,536 others, as `RecordFormat.readMap` does. `SnapshotFormatTest` checks that it fails on the bytes `RecordFormat.readMap` fails on, and on keys that are null, have a bitmap, a type argument or an enum, or hold a collection.
+`ResourceLimitsTest` covers each: a string over its budget fails at its length though every char follows, a collection at its size, and neither is written; a map with 1,025 keys of one hash code fails at the last of them and isn't written, the read's comparisons are those above, and `MapKeys` counts and rejects the key types above, checks `D01<Long>`'s 3^30 instantiations allocating under 1 MiB, and finds the records a codec counts, generic ones included; corrupt sizes within the budget, nested ones included, allocate under 1 MB before the end of the input; `List<Shutdown>`, a `Map` value, a field and a type argument without bytes are refused by the writer, and `List<Shutdown>` by the reader; the old-layout walker consumes a byte on every turn of a corrupt `List<Long?>`, allocates nothing, and stops at the budget; a corrupt `Map<Int, Long?>` makes it keep under 64 times the bytes it consumed; and it finds a key that's there twice after 65,536 others, as `RecordFormat.readMap` does. `SnapshotFormatTest` checks that it fails on the bytes `RecordFormat.readMap` fails on, and on keys that are null, have a bitmap, a type argument or an enum, or hold a collection.
 
 ### Where the codecs live
 
@@ -209,39 +229,63 @@ User(42, "Ada")
 04 41 64 61                 name
 ```
 
-The nullable variant has a constructor order that isn't its canonical order:
+The nullable variant, in constructor order:
 
 ```text
 Account(id: Long, name: String?, email: String?, balance: Double?, rating: Float)
-canonical order: balance, email, id, name, rating. Bitmap: balance bit 0, email bit 1, name bit 2.
+persisted order: id, name, email, balance, rating. Bitmap: name bit 0, email bit 1, balance bit 2.
 
 Account(7, "Ada", null, Double.fromBits(0x7ff0000000000001), Float.fromBits(0x7f800001))
 02                          bitmap: email is null
-7f f8 00 00 00 00 00 00     balance: a NaN with a payload, written as the canonical NaN
 00 00 00 00 00 00 00 07     id
 04 41 64 61                 name
+7f f8 00 00 00 00 00 00     balance: a NaN with a payload, written as the canonical NaN
 7f c0 00 00                 rating: the same for Float
 
 Account(7, null, null, null, -0.0f)
-07                          bitmap: balance, email and name are null
+07                          bitmap: name, email and balance are null
 00 00 00 00 00 00 00 07     id
 80 00 00 00                 rating: negative zero
 ```
 
+The same record with `@PersistedFieldOrder`, whose sparse keys give it another persisted order, the bitmap's included:
+
+```text
+Account(@property:PersistedFieldOrder(order = 30) id: Long,
+        @property:PersistedFieldOrder(order = 10) name: String?,
+        @property:PersistedFieldOrder(order = 20) email: String?,
+        @property:PersistedFieldOrder(order = 99) balance: Double?,
+        @property:PersistedFieldOrder(order = 0) rating: Float)
+persisted order: rating, name, email, id, balance. Bitmap: name bit 0, email bit 1, balance bit 2.
+
+Account(7, "Ada", null, Double.fromBits(0x7ff0000000000001), Float.fromBits(0x7f800001))
+02                          bitmap: email is null
+7f c0 00 00                 rating
+04 41 64 61                 name
+00 00 00 00 00 00 00 07     id
+7f f8 00 00 00 00 00 00     balance
+
+Account(7, null, "e", null, -0.0f)
+05                          bitmap: name and balance are null
+80 00 00 00                 rating
+02 65                       email
+00 00 00 00 00 00 00 07     id
+```
+
 ```text
 Session(user: User, note: String?, previous: User?)
-canonical order: note, previous, user. Bitmap: note bit 0, previous bit 1.
+persisted order: user, note, previous. Bitmap: note bit 0, previous bit 1.
 
 Session(User(42, "Ada"), "hi", User(41, "Al"))
-00 | 03 68 69 | 00 00 00 00 00 00 00 29 03 41 6c | 00 00 00 00 00 00 00 2a 04 41 64 61
+00 | 00 00 00 00 00 00 00 2a 04 41 64 61 | 03 68 69 | 00 00 00 00 00 00 00 29 03 41 6c
 
 Session(User(42, "Ada"), null, null)
 03 | 00 00 00 00 00 00 00 2a 04 41 64 61
 
-Wide(a … i: Boolean?), nine nullable fields: two bitmap bytes
+Wide(i, h, g, f, e, d, c, b, a: Boolean?), nine nullable fields: two bitmap bytes, i bit 0 to a bit 8
 all null              ff 01
-only a = true         fe 01 | 01
-only i = false        ff 00 | 00
+only a = true         ff 00 | 01
+only i = false        fe 01 | 00
 
 Top-level User?
 null                  00
@@ -272,7 +316,7 @@ The snapshot data is the Flink-free part, which `flinkt-core` encodes, and then 
 - the **key role**: value, map key or partition key ([Keys](schema-evolution.md#keys));
 - the **root type**: the serialized type, with its type arguments as substituted, such as `com.example.Envelope<com.example.User>`;
 - every **declaration** reachable from it, each once, sorted by type name:
-  - a record: its type parameters, and its fields in **primary-constructor order**, each with its name and full type;
+  - a record: its type parameters, its fields in **persisted order**, each with its name and full type, and its **constructor order**, as each field's position in that list;
   - a value class: its type parameters and its underlying property;
   - an enum: each constant's ID and name, in ascending ID order;
   - a sealed type: its type parameters, and each direct subtype's ID and type, in ascending ID order;
@@ -292,11 +336,11 @@ How this meets [What the first snapshot must carry](schema-evolution.md#what-the
 | two versions | Flink's snapshot version, and the record format version in the data |
 | one stable snapshot class | [The snapshot class](#the-snapshot-class) |
 | type identity by JVM class name | declaration names ([Type identity](#type-identity)) |
-| field identity by name, canonical order | field names. The record format version defines the order |
-| constructor order | the order of a record's fields |
+| field identity by name, the persisted order | field names, in the order a record's bytes follow |
+| constructor order | a record's constructor order, beside its fields |
 | the key role | the role byte |
 
-Enum constants and sealed subtypes are written in ID order, so declaring them in another order changes neither the records nor the snapshot. A record's fields are in constructor order, which is how the snapshot records that order, and the canonical order the bytes use is derived from their names. So declaring a record's fields in another order changes the snapshot and not the layout. `SnapshotFormatTest` checks both.
+Enum constants and sealed subtypes are written in ID order, so declaring them in another order changes neither the records nor the snapshot. A record's fields are written in persisted order, which is its layout, and its constructor order follows as a list of positions in it. Each is recorded as it is, never derived from the other or from the names, and `@PersistedFieldOrder`'s keys aren't recorded, only the order they give. So a constructor reorder without keys changes the fields' list, one with keys that keep the persisted order changes only the positions, and a renumbering changes nothing. `SnapshotFormatTest` checks each, and that both orders round-trip.
 
 A declaration is referenced by its type name. That name is its identity, and it appears once in the snapshot, so a type reached from several fields is written once. A recursive type, `Node(children: List<Node>)`, would need no new format. The first release rejects one, as the codec SPI does.
 
@@ -323,7 +367,8 @@ Type
 
 Declaration
     byte kind, String type name, then by kind:
-    1 record       Int type-parameter count, String each; Int field count, Field each, in constructor order
+    1 record       Int type-parameter count, String each; Int field count, Field each, in persisted order;
+                   Int field count again, then each field's Int position in that list, in constructor order
     2 value class  Int type-parameter count, String each; Field underlying
     3 enum         Int constant count; Int ID, String name each, in ascending ID order
     4 sealed       Int type-parameter count, String each; Int subtype count; Int ID, Type each, in ascending ID order
@@ -339,7 +384,7 @@ Attributes
 
 Built-ins (`kotlin.Boolean`, `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Char`, `String`) and collections (`kotlin.collections.List` and `Map`) are named by their Kotlin names and have no declaration. Every other class type names a declaration in the snapshot.
 
-`User(id: Long, name: String)` in the value role is 120 bytes of data:
+`User(id: Long, name: String)` in the value role is 132 bytes of data:
 
 ```text
 00 00 00 01                     record format version 1
@@ -349,17 +394,19 @@ Built-ins (`kotlin.Boolean`, `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, 
 00 00 00 01                     one declaration
 01 11 "com.example.User"        a record, com.example.User
 00 00 00 00                     no type parameters
-00 00 00 02                     two fields, in constructor order
+00 00 00 02                     two fields, in persisted order
 03 "id"    01 0c "kotlin.Long"   00 00 00 00 00    00 00 00 00
 05 "name"  01 0e "kotlin.String" 00 00 00 00 00    00 00 00 00
                                 each: name, type, no attributes
+00 00 00 02 00 00 00 00 00 00 00 01
+                                constructor order: id is field 0, name field 1
 00 00 00 00                     no declaration attributes
 00 00 00 00                     no snapshot attributes
 ```
 
 `SnapshotFormatTest` has these bytes in full. A user's checkpoint holds them after Flink's framing: the class name with `writeUTF`, then the snapshot format version as an `Int`, then the data, then the adapter's part, here `00 00 00 00`.
 
-Fixed-width integers make a snapshot larger than varints would: with one-byte varints, `User`'s would be 87 bytes instead of 120. A snapshot is written once per state per checkpoint, not per record. Fixed widths keep it readable as hex and match the record format.
+Fixed-width integers make a snapshot larger than varints would: with one-byte varints, `User`'s would be 90 bytes instead of 132. A snapshot is written once per state per checkpoint, not per record. Fixed widths keep it readable as hex and match the record format.
 
 ### Nested Flink snapshots
 
@@ -374,7 +421,7 @@ The writer and the reader run the same checks, so a release never writes a snaps
 - a type parameter is referenced only inside a declaration that declares it, and the root type references none;
 - every declaration is reachable from the root, and none reaches itself. The first release supports no recursive type;
 - an object or a record without fields is only the root type or a sealed subtype ([Resource limits](#resource-limits));
-- a record's field names are unique, and enum and sealed IDs are positive and ascending. A sealed subtype is a declared record, object or sealed type;
+- a record's field names are unique, and its constructor order names each of its fields once. Enum and sealed IDs are positive and ascending. A sealed subtype is a declared record, object or sealed type;
 - names aren't empty;
 - an unknown kind, variance, role or critical attribute fails, naming it.
 
@@ -408,7 +455,7 @@ Field attribute tag `1` is reserved for [#35](https://github.com/Lychee-Technolo
 - A generated type is its JVM class name, as `Class.getName()` spells it: `com.example.User`, `com.example.Outer$User`. Renaming or moving the class is incompatible. A logical type ID would be a separate decision.
 - A field is its Kotlin property name. A rename is a removal and an addition ([#25](schema-evolution.md#values)). Stable field IDs or rename mappings would be a separate, later decision, and only for a concrete use case.
 - An enum constant or sealed subtype is its `@FlinkId` within its namespace (#20). The snapshot records each ID's name only to catch an ID swap.
-- Constructor order is recorded beside the fields, for the partition-key rule, and identifies nothing.
+- Persisted order and constructor order are each recorded, the first because the bytes follow it, the second for the hash-code rules ([Restore](#restore)). Neither identifies a field, and neither do `@PersistedFieldOrder`'s keys, which the snapshot doesn't record.
 
 ## Restore
 
@@ -422,6 +469,11 @@ Field attribute tag `1` is reserved for [#35](https://github.com/Lychee-Technolo
 | the root type's class is gone, or has no codec | throws, naming the type |
 | the snapshot's record format version isn't one this release reads | throws, naming the version |
 
+A record's two orders are compared on their own ([Field order](#field-order)):
+
+- **A changed persisted order is incompatible**, in every role: reading the old bytes in the new order would misread them, and no migration stage permutes fields. A separately reviewed and tested stage may add one later. Until then the diagnostic names the old and new order, and says how to keep the layout with `@PersistedFieldOrder`. The fields a migration keeps are compared the same way: they have to stay in the old relative order.
+- **A changed constructor order alone is as-is**, except in two places, where what a release persisted depends on a data class's hash code. In the partition-key role it's incompatible, because the key groups would move. Under a `Map` key it's incompatible too, because a codec counts the map's keys by hash code where it's written and where it's read, and a map within the budget could be over it ([Resource limits](#resource-limits)). For a generic declaration, the planner counts a type parameter as under a key in every use of its declaration if it is in one, which can only make it stricter.
+
 It never returns a serializer that could misread the old bytes. A class that's absent only because a removed field used it is fine: the old-layout serializer walks the old schema, not the class, with the same checks a codec makes on each value it reads. Until #35, #12 implements only the as-is branch and throws for everything else. That's the interim implementation of this design, not a different design.
 
 **Incompatible means fail.** Flink calls `restoreSerializer()` at restore for every restored state, whether the job registers it again or not ([What Flink does on restore](schema-evolution.md#what-flink-does-on-restore)). So an incompatible state fails the restore even when the new job no longer uses it. The alternative was a serializer that refuses to read or write but keeps the old snapshot. RocksDB would then carry the state's bytes into every later checkpoint, and the heap backend would still fail, because it reads every entry at restore. The failure would move from the restore that caused it to a later job that registers the state again, and the same savepoint would restore on one backend and fail on the other. A user who drops such a state removes it from the savepoint first, with Flink's State Processor API, or keeps the type compatible. `--allowNonRestoredState` skips the state of operators the new job doesn't have, so it doesn't help while the operator still exists. A carry-forward serializer for RocksDB could be designed later, separately, with backend-specific evidence.
@@ -430,7 +482,9 @@ It never returns a serializer that could misread the old bytes. A class that's a
 
 - **`User(id)` restored as `User(id, name: String)`**, which has no migration default. `restoreSerializer()` throws `Can't restore com.example.User (role: value): com.example.User.name was added as kotlin.String, without a migration default (#37). Old: …. Current: …`, with removal enabled too, and `resolveSchemaCompatibility` is incompatible. Read as-is, the same bytes would have given `User(id=1, name=Ada)`.
 - **`User(id, name, profile: OldProfile)` restored as `User(id, name)`**, with `OldProfile` and its nested `Address` absent from the class loader. The interim `restoreSerializer()` throws, naming the removal and its stage, #36. With removal enabled, the old-layout serializer reads three records back to back into current `User`s. It consumes each profile, nullable fields and a nullable nested record included, by walking the schema read from the snapshot, and reports the old schema as its snapshot, byte for byte. A corrupt bitmap in a removed value fails the read instead of shifting the next record.
-- **A constructor reorder** of `Key(a, b)` restores as-is as a value, and fails as a partition key, naming the old and new order.
+- **A constructor reorder without keys**, `Key(a, b)` to `Key(b, a)`, fails in every role, naming the old and new persisted order.
+- **A constructor reorder that keeps the persisted order**, `Key(a, b)` to `Key(@PersistedFieldOrder(7) b, @PersistedFieldOrder(3) a)`, restores as-is as a value and as a map key, and fails as a partition key, naming the old and new constructor order.
+- **The same reorder under a `Map` key**: `Holder(keys: Map<Key, Boolean>)` with 1,025 keys `Key(-31 * i, i)`, which the old release wrote. The current codec would fail its read at the 1,025th key, so the restore fails first, with the planner's diagnostic, and `resolveSchemaCompatibility` is incompatible. Renumbering the keys, which changes no order, restores it as-is and reads every key.
 - **A removed `Map<String, Long>` that holds a key twice** fails the read in the old-layout serializer, as the old codec fails on the same bytes, though the map's values are never built.
 - **A map key** that lost a field fails even with removal enabled.
 - **A root type the job no longer has** fails, naming it. So do an unknown snapshot format version and an unknown record format version.
@@ -439,22 +493,24 @@ These show the format supports what #35 to #38 will build. They don't ship any m
 
 ## Evidence
 
-The prototype is test code in `adapters/shared/src/test/kotlin/io/flinkt/flink/format`. The adapters' shared tests run on both PR lanes, so each test runs against Flink 2.3.0 and 1.20.5. Flink 2.2 has no adapter yet ([#27](https://github.com/Lychee-Technology/flinkt/issues/27)), so the 2.3 adapter's `flink22FormatTest` compiles `RecordFormatTest`, `StringFormatTest` and the prototype they test against Flink 2.2.1 and runs them on it, and `FormatFlinkLineTest` fails unless they ran on 2.2.1. The adapter's `check` runs it, so the primary PR lane does. #27's adapter replaces it.
+The prototype is test code in `adapters/shared/src/test/kotlin/io/flinkt/flink/format`. The adapters' shared tests run on both PR lanes, so each test runs against Flink 2.3.0 and 1.20.5. The prototype of KSP's `@PersistedFieldOrder` checks is in `flinkt-ksp`'s `persistedOrderPrototype` source set, and its test runs on the primary lane, because KSP's checks don't depend on Flink. Flink 2.2 has no adapter yet ([#27](https://github.com/Lychee-Technology/flinkt/issues/27)), so the 2.3 adapter's `flink22FormatTest` compiles `RecordFormatTest`, `StringFormatTest` and the prototype they test against Flink 2.2.1 and runs them on it, and `FormatFlinkLineTest` fails unless they ran on 2.2.1. The adapter's `check` runs it, so the primary PR lane does. #27's adapter replaces it.
 
 ```sh
 ./gradlew :flinkt-flink23:test --tests 'io.flinkt.flink.format.*'
 ./gradlew :flinkt-flink120:test --tests 'io.flinkt.flink.format.*'
 ./gradlew :flinkt-flink23:flink22FormatTest
+./gradlew :flinkt-ksp:test
 ```
 
 | Test | Shows |
 |---|---|
-| `RecordFormatTest` | the [examples](#examples) and every scalar at boundary values, with the same bytes on a `DataOutputSerializer` and a paged view; NaN payloads and signed zero; Flink's built-in serializers' bytes; key bytes equal exactly when keys are equal; a `T?` field's marker; strict reads. Also on 2.2.1 |
+| `RecordFormatTest` | the [examples](#examples), with and without `@PersistedFieldOrder`, and every scalar at boundary values, with the same bytes on a `DataOutputSerializer` and a paged view; NaN payloads and signed zero; Flink's built-in serializers' bytes; key bytes equal exactly when keys are equal; a `T?` field's marker; strict reads. Also on 2.2.1 |
 | `StringFormatTest` | the string format, byte-equal to `StringValue.writeString` on both views; lossless round trips, unpaired surrogates included; what UTF-8 and `writeUTF` lose; strict reads; bounded allocation. Also on 2.2.1 |
-| `ResourceLimitsTest` | the [resource limits](#resource-limits): string and collection budgets on write and read, allocation under corrupt sizes, the zero-width rule, the budget on a map's keys that share a hash code, on write and read, with the comparisons it bounds and the key types `MapKeys` counts or rejects, the old-layout walker's work and its duplicate-key check |
-| `CanonicalOrderTest` | reading into locals in canonical order and calling the constructor once, on Kotlin 2.4.0 and 2.4.21; a reorder keeps the bytes and moves the key group |
-| `SnapshotFormatTest` | `User`'s snapshot bytes; every planned shape round-trips; ID order; validation, attributes, budgets, truncation; bounded checks on a 100,000-declaration chain and a generic schema; linear reads and checks of wide declarations and long names; a schema-driven reader that consumes a value of every planned shape but value classes, and rejects a `00` marker in a present `T?` field and a map that holds a key twice |
-| `RestorePrototypeTest` | the [restores](#restore), through Flink's versioned snapshot read and a class loader with only the current declaration |
+| `ResourceLimitsTest` | the [resource limits](#resource-limits): string and collection budgets on write and read, allocation under corrupt sizes, the zero-width rule, the budget on a map's keys that share a hash code, on write and read, with the comparisons it bounds and the key types `MapKeys` counts or rejects, in linear time for a generic key type of 3^30 instantiations, the records a codec counts, the old-layout walker's work and its duplicate-key check |
+| `PersistedOrderTest` | constructor order by default, and `@PersistedFieldOrder`'s order; reading into locals in persisted order and calling the constructor once, on Kotlin 2.4.0 and 2.4.21; a reorder without keys reorders the bytes, and one with keys keeps them and moves the key group |
+| `PersistedFieldOrderTest`, in `flinkt-ksp` | the persisted order KSP's prototype computes, by default and from sparse and renumbered keys, on Kotlin 2.4.0 and 2.4.21; its errors, each located at its declaration, for partial coverage, a negative key, a repeated key, and an annotation on a body property, a value class's property, a class that isn't a `@FlinkType` and a top-level property |
+| `SnapshotFormatTest` | `User`'s snapshot bytes; every planned shape round-trips; ID order; both of a record's orders, recorded and read back, and a malformed constructor order; validation, attributes, budgets, truncation; bounded checks on a 100,000-declaration chain and a generic schema; linear reads and checks of wide declarations and long names; a schema-driven reader that consumes a value of every planned shape but value classes, and rejects a `00` marker in a present `T?` field and a map that holds a key twice |
+| `RestorePrototypeTest` | the [restores](#restore), through Flink's versioned snapshot read and a class loader with only the current declaration, the reorders in each role and under a `Map` key included |
 
 What the prototype doesn't show: a real checkpoint or savepoint on either backend, or a restore across adapters. Those are [#12](https://github.com/Lychee-Technology/flinkt/issues/12), [#26](https://github.com/Lychee-Technology/flinkt/issues/26) and [#29](https://github.com/Lychee-Technology/flinkt/issues/29), and testing.md's [snapshot evidence](testing.md#serializer-snapshot-compatibility) applies to them.
 
@@ -465,12 +521,14 @@ What the prototype doesn't show: a real checkpoint or savepoint on either backen
 - **Shading.** Relocating `io.flinkt` in a job jar changes the snapshot class name in every checkpoint ([The snapshot class](#the-snapshot-class)).
 - **The budgets are judgment.** A schema deeper than 64 levels or larger than 16 MiB fails when its serializer is created, before any state exists. A string over 2^26 chars or a collection over 2^26 elements fails when it's written: on RocksDB the state `update()`, on the heap backend the checkpoint. Raising a budget is compatible, and lowering one never is.
 - **No zero-width elements.** An object or a record without fields can't be an element, a field or a type argument ([Resource limits](#resource-limits)). Such a type has one value, so little is lost, but it's a rule users can meet, with an error naming the type.
-- **Keys that share a hash code.** The budget limits legitimate maps too. One with more than 1,024 record or value-class keys of one hash code fails when it's written: on RocksDB the state `update()`, on the heap backend the checkpoint, on a network edge the emit. A job that fills such a map from untrusted input already pays for those keys in its own `LinkedHashMap`, which compares each lookup with all of them. A `Map` key type can't hold an enum or an object inside a record or a value class ([Resource limits](#resource-limits)). And a constructor reorder in a record under a `Map` key restores as-is ([Keys](schema-evolution.md#keys)) but changes its keys' hash codes, so a map within the budget can be over it for the release that reordered, and its read then fails, naming a key and its hash code.
+- **Keys that share a hash code.** The budget limits legitimate maps too. One with more than 1,024 record or value-class keys of one hash code fails when it's written: on RocksDB the state `update()`, on the heap backend the checkpoint, on a network edge the emit. A job that fills such a map from untrusted input already pays for those keys in its own `LinkedHashMap`, which compares each lookup with all of them. A `Map` key type can't hold an enum or an object inside a record or a value class, and a record under a `Map` key can't have its constructor reordered, even with its persisted order kept, because that would change the hash codes the budget was checked with ([Resource limits](#resource-limits)).
+- **Constructor order is the default layout.** Reordering a record's constructor without `@PersistedFieldOrder` changes its bytes, and the restore fails, though under name order it would have been as-is. The diagnostic says how to keep the layout: give each property a key in the old order. Until #11, the annotation's checks are a prototype.
 - **Strings cost a call per byte** through `DataOutput`, as Flink's `StringValue` does. That's unmeasured. Buffering would keep the bytes.
 
 ## Not decided here
 
 - What the old-layout serializer writes for a removed field when Flink carries a state forward, and the dropped-value marker's payload: [#35](https://github.com/Lychee-Technology/flinkt/issues/35).
+- A migration that permutes fields, which would make a change of persisted order compatible: a separate decision, with its own review and evidence. Until it lands, such a change is incompatible.
 - The value-class representation: [#18](https://github.com/Lychee-Technology/flinkt/issues/18). The snapshot already records the wrapper and its underlying property.
 - Whether generic classes are supported: [#22](https://github.com/Lychee-Technology/flinkt/issues/22). Their bytes are above if they are.
 - Migration defaults for added fields: [#37](https://github.com/Lychee-Technology/flinkt/issues/37).

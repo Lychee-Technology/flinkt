@@ -116,13 +116,38 @@ class RestorePrototypeTest {
     }
 
     @Test
-    fun `a constructor reorder restores as-is in a value, and fails in a partition key`() {
+    fun `without PersistedFieldOrder, a constructor reorder reorders the layout, and fails in every role`() {
         val oldLoader = Declarations.load(Declarations.KEY_AB)
         val reordered = Declarations.load(Declarations.KEY_BA)
+        for (role in KeyRole.entries) {
+            val old = OldState.write(oldLoader, "com.example.Key", role)
+            val e = assertThrows<IncompatibleStateException> { old.readSnapshot(reordered).restore(Operation.entries.toSet()) }
+            assertEquals(
+                "Can't restore com.example.Key (role: ${role.name.lowercase().replace('_', ' ')}): the persisted order of " +
+                    "com.example.Key changed from (a, b) to (b, a). Its records are written in that order, and reading " +
+                    "them in another is a field permutation, which no migration stage performs. Without " +
+                    "@PersistedFieldOrder, the persisted order is the constructor order: to reorder the constructor and " +
+                    "keep the layout, give each property a @PersistedFieldOrder in the old order",
+                e.message,
+            )
+        }
+        val value = OldState.write(oldLoader, "com.example.Key")
+        assertTrue(currentSnapshot(reordered, "com.example.Key").resolveSchemaCompatibility(value.readSnapshot(reordered)).isIncompatible)
+    }
 
-        val value = OldState.write(oldLoader, "com.example.Key", KeyRole.VALUE)
-        val restored = value.readSnapshot(reordered).restoreSerializer()
-        assertEquals(listOf("Key(b=2, a=1)"), value.readAll(restored))
+    @Test
+    fun `with PersistedFieldOrder keeping the layout, a constructor reorder restores as-is in a value and a map key, and fails in a partition key`() {
+        // Key(a, b), written in constructor order, restored as Key(@PersistedFieldOrder(7) b, @PersistedFieldOrder(3) a).
+        val oldLoader = Declarations.load(Declarations.KEY_AB)
+        val reordered = Declarations.load(Declarations.KEY_BA_PINNED)
+
+        for (role in listOf(KeyRole.VALUE, KeyRole.MAP_KEY)) {
+            val old = OldState.write(oldLoader, "com.example.Key", role)
+            val restored = old.readSnapshot(reordered).restoreSerializer()
+            assertEquals(listOf("Key(b=2, a=1)"), old.readAll(restored))
+        }
+        val value = OldState.write(oldLoader, "com.example.Key")
+        assertTrue(currentSnapshot(reordered, "com.example.Key").resolveSchemaCompatibility(value.readSnapshot(reordered)).isCompatibleAsIs)
 
         val partitionKey = OldState.write(oldLoader, "com.example.Key", KeyRole.PARTITION_KEY)
         val e = assertThrows<IncompatibleStateException> { partitionKey.readSnapshot(reordered).restoreSerializer() }
@@ -131,6 +156,50 @@ class RestorePrototypeTest {
                 "from (a, b) to (b, a). Its bytes didn't change, but a data class's generated hashCode() follows " +
                 "constructor order, so the partition key's key groups would move",
             e.message,
+        )
+    }
+
+    @Test
+    fun `a constructor reorder of a record under a Map key fails the restore, instead of a read the old writer's map would fail`() {
+        // Holder(keys: Map<Key, Boolean>) with 1,025 keys Key(-31 * i, i): hash codes -960 * i, all different, so
+        // the old release wrote the map. Key's constructor is then reordered, keeping its persisted order.
+        val oldLoader = Declarations.load(Declarations.HOLDER_AB_PINNED)
+        val reordered = Declarations.load(Declarations.HOLDER_BA_PINNED)
+        val old = OldState.write(oldLoader, "com.example.Holder")
+        assertEquals(9_229, old.bytes.size)
+
+        // Every key now hashes to 31 * i - 31 * i = 0. Read as-is, the current codec would fail at the 1,025th key.
+        val read = assertThrows<MalformedDataException> { codec(reordered, "com.example.Holder").deserialize(DataInputDeserializer(old.bytes)) }
+        assertEquals(
+            "a map holds more than 1024 keys whose hashCode() is 0, such as Key(b=1024, a=-31744), over the budget of " +
+                "1024 keys per hash code",
+            read.message,
+        )
+
+        // So the plan isn't as-is: the restore fails with the planner's diagnostic before anything is read.
+        val snapshot = old.readSnapshot(reordered)
+        for (enabled in listOf(emptySet(), Operation.entries.toSet())) {
+            val e = assertThrows<IncompatibleStateException> { snapshot.restore(enabled) }
+            assertEquals(
+                "Can't restore com.example.Holder (role: value): the constructor order of com.example.Key changed from " +
+                    "(a, b) to (b, a). Its bytes didn't change, but a data class's generated hashCode() follows " +
+                    "constructor order, and com.example.Key is in a Map key, whose keys are counted by hash code where " +
+                    "the map is written and where it's read. A map written within the budget of 1024 keys per hash " +
+                    "code could be over it when it's read",
+                e.message,
+            )
+        }
+        assertTrue(currentSnapshot(reordered, "com.example.Holder").resolveSchemaCompatibility(snapshot).isIncompatible)
+
+        // A change that is as-is keeps every key's hash code, so the same map restores and reads: here the keys are
+        // renumbered, which changes no order, and so no byte of the snapshot.
+        val renumbered = Declarations.load(Declarations.HOLDER_AB_RENUMBERED)
+        val restored = old.readSnapshot(renumbered).restoreSerializer()
+        assertInstanceOf(PrototypeSerializer::class.java, restored)
+        assertEquals(old.values, old.readAll(restored))
+        assertArrayEquals(
+            (currentSnapshot(oldLoader, "com.example.Holder") as PrototypeSerializerSnapshot<*>).persistedSchema.encoded,
+            (currentSnapshot(renumbered, "com.example.Holder") as PrototypeSerializerSnapshot<*>).persistedSchema.encoded,
         )
     }
 

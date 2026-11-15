@@ -64,7 +64,14 @@ enum class FieldOperation { KEEP, REMOVE }
 
 /**
  * The prototype planner. It covers what the restore prototypes need: an identical schema, a constructor reorder in
- * each role, fields removed from or added to the root record, and type changes. #34 plans every shape.
+ * each role and under a `Map` key, a changed persisted order, fields removed from or added to the root record, and
+ * type changes. #34 plans every shape.
+ *
+ * A record's two orders are compared separately (docs/persisted-format.md, "Field order"). Its persisted order is its
+ * layout: a change to it is a field permutation, which no stage migrates yet, so it's incompatible. Its constructor
+ * order decides no byte, but a data class's generated `hashCode()` follows it, so a change to it alone is as-is
+ * except where what a release persisted depends on a hash code: in a partition key, whose key groups follow it, and
+ * in a record under a `Map` key, whose keys a codec counts by hash code where the map is written and where it's read.
  */
 object Planner {
     fun plan(old: PersistedSchema, current: PersistedSchema, currentRole: KeyRole, enabled: Set<Operation>): Plan {
@@ -79,19 +86,30 @@ object Planner {
                     "reads version ${RecordFormat.VERSION}",
             )
         }
-        val partitionKey = KeyRole.PARTITION_KEY in roles
-        if (old.sameLayout(current, compareConstructorOrder = partitionKey)) return Plan.AsIs
-        if (partitionKey && old.sameLayout(current, compareConstructorOrder = false)) {
-            val reordered = old.declarations.values.filterIsInstance<RecordSchema>().first { record ->
-                record.fields.map { it.name } != (current.declarations.getValue(record.typeName) as RecordSchema).fields.map { it.name }
-            }
-            val now = current.declarations.getValue(reordered.typeName) as RecordSchema
-            return incompatible(
-                "the constructor order of ${reordered.typeName} changed from (${reordered.fields.joinToString { it.name }}) " +
-                    "to (${now.fields.joinToString { it.name }}). Its bytes didn't change, but a data class's generated " +
-                    "hashCode() follows constructor order, so the partition key's key groups would move",
-            )
+        // Records with the same fields in both schemas: a change of either order is checked first, by itself.
+        val sameFields = old.declarations.values.filterIsInstance<RecordSchema>().mapNotNull { record ->
+            val now = current.declarations[record.typeName] as? RecordSchema
+            if (now != null && now.fields.toSet() == record.fields.toSet()) record to now else null
         }
+        for ((before, now) in sameFields) {
+            if (before.persistedFields != now.persistedFields) return incompatible(persistedOrderChanged(before, now))
+        }
+        val counted by lazy { MapKeys.countedRecords(old) + MapKeys.countedRecords(current) }
+        for ((before, now) in sameFields) {
+            if (before.fields == now.fields) continue
+            val change = "the constructor order of ${before.typeName} changed from (${names(before.fields)}) to " +
+                "(${names(now.fields)}). Its bytes didn't change, but a data class's generated hashCode() follows " +
+                "constructor order"
+            if (KeyRole.PARTITION_KEY in roles) return incompatible("$change, so the partition key's key groups would move")
+            if (before.typeName in counted) {
+                return incompatible(
+                    "$change, and ${before.typeName} is in a Map key, whose keys are counted by hash code where the " +
+                        "map is written and where it's read. A map written within the budget of " +
+                        "${RecordFormat.MAX_KEYS_PER_HASH_CODE} keys per hash code could be over it when it's read",
+                )
+            }
+        }
+        if (old.sameLayout(current)) return Plan.AsIs
         val firstDifference = difference(old, current)
         if (roles.any { it != KeyRole.VALUE }) {
             return incompatible("a key's schema doesn't change, and $firstDifference")
@@ -108,12 +126,17 @@ object Planner {
                     "Old: $oldRecord. Current: $currentRecord",
             )
         }
+        // The fields that stay are written in the old persisted order: the same as the current one, or a permutation.
+        val kept = oldRecord.persistedFields.filter { it.name in currentFields }
+        if (kept.map { it.name } != currentRecord.persistedFields.map { it.name }) {
+            return incompatible(persistedOrderChanged(oldRecord, currentRecord))
+        }
         val operations = LinkedHashMap<String, FieldOperation>()
-        for (field in oldRecord.fields) {
+        for (field in oldRecord.persistedFields) {
             val now = currentFields[field.name]
             operations[field.name] = when {
                 now == null -> FieldOperation.REMOVE
-                now.type == field.type && reachable(old, field.type) == reachable(current, now.type) -> FieldOperation.KEEP
+                now.type == field.type && sameLayouts(reachable(old, field.type), reachable(current, now.type)) -> FieldOperation.KEEP
                 else -> return incompatible(
                     "${oldRecord.typeName}.${field.name} changed from ${field.type} to ${now.type}, or a type it " +
                         "contains changed. Old: $oldRecord. Current: $currentRecord",
@@ -130,12 +153,24 @@ object Planner {
         return Plan.Migrate(operations)
     }
 
+    private fun names(fields: List<FieldSchema>) = fields.joinToString { it.name }
+
+    private fun persistedOrderChanged(old: RecordSchema, current: RecordSchema): String =
+        "the persisted order of ${old.typeName} changed from (${names(old.persistedFields)}) to " +
+            "(${names(current.persistedFields)}). Its records are written in that order, and reading them in another " +
+            "is a field permutation, which no migration stage performs. Without @PersistedFieldOrder, the persisted " +
+            "order is the constructor order: to reorder the constructor and keep the layout, give each property a " +
+            "@PersistedFieldOrder in the old order"
+
     private fun difference(old: PersistedSchema, current: PersistedSchema): String {
         if (old.root != current.root) return "the serialized type changed from ${old.root} to ${current.root}"
         val names = (old.declarations.keys + current.declarations.keys).sorted()
-        val name = names.first { old.declarations[it] != current.declarations[it] }
+        val name = names.first { !PersistedSchema.sameLayout(old.declarations[it], current.declarations[it]) }
         return "the declaration of $name changed. Old: ${old.declarations[name] ?: "none"}. Current: ${current.declarations[name] ?: "none"}"
     }
+
+    private fun sameLayouts(a: Map<String, DeclarationSchema>, b: Map<String, DeclarationSchema>): Boolean =
+        a.keys == b.keys && a.all { (name, declaration) -> PersistedSchema.sameLayout(declaration, b[name]) }
 
     private fun reachable(schema: PersistedSchema, type: SchemaType): Map<String, DeclarationSchema> {
         val found = sortedMapOf<String, DeclarationSchema>()
@@ -300,28 +335,29 @@ class OldLayoutSerializer<T>(
     private val current: CurrentType<T>,
 ) : TypeSerializer<T>() {
     private val oldRecord = old.declaration(old.root.name) as RecordSchema
-    private val canonicalFields = oldRecord.fields.sortedBy { it.name }
-    private val nullableFields = canonicalFields.count { it.type.isNullable }
+    private val persistedFields = oldRecord.persistedFields
+    private val nullableFields = persistedFields.count { it.type.isNullable }
 
     @Suppress("UNCHECKED_CAST")
     private val constructor = current.codec as? MigrationConstructor<T>
         ?: throw IncompatibleStateException("${old.root}'s codec has no migration constructor")
     private val walker = SchemaWalker(old)
 
-    // Per old field, in canonical order, decided once: how it's read, and for a kept one, its constructor parameter.
-    private val readers: List<((DataInput) -> Any?)?> = canonicalFields.map { field ->
+    // Per old field, in the old persisted order, decided once: how it's read, and for a kept one, its current
+    // constructor parameter, found by name.
+    private val readers: List<((DataInput) -> Any?)?> = persistedFields.map { field ->
         when (plan.operations.getValue(field.name)) {
             FieldOperation.KEEP -> reader(field.type as SchemaType.ClassType)
             FieldOperation.REMOVE -> null
         }
     }
-    private val parameters = IntArray(canonicalFields.size) { constructor.parameterNames.indexOf(canonicalFields[it].name) }
+    private val parameters = IntArray(persistedFields.size) { constructor.parameterNames.indexOf(persistedFields[it].name) }
 
     override fun deserialize(source: DataInputView): T {
         val nulls = RecordFormat.readNullBitmap(source, nullableFields)
         val arguments = arrayOfNulls<Any?>(constructor.parameterNames.size)
         var nullable = 0
-        for ((i, field) in canonicalFields.withIndex()) {
+        for ((i, field) in persistedFields.withIndex()) {
             val present = !field.type.isNullable || !nulls[nullable++]
             val read = readers[i]
             when {
@@ -557,8 +593,8 @@ class SchemaWalker(private val schema: PersistedSchema) {
         /** Each type parameter's position. */
         val parameters: Map<String, Int> = schema.typeParameters.withIndex().associate { (index, name) -> name to index }
 
-        /** A record's fields, in canonical order, and how many of them are nullable. */
-        val fields: List<FieldSchema> = (schema as? RecordSchema)?.fields.orEmpty().sortedBy { it.name }
+        /** A record's fields, in its persisted order, and how many of them are nullable. */
+        val fields: List<FieldSchema> = (schema as? RecordSchema)?.persistedFields.orEmpty()
         val nullableFields: Int = fields.count { it.type.isNullable }
 
         /** An enum's constant IDs, or a sealed type's subtype IDs, in ascending order, and the subtypes in that order. */

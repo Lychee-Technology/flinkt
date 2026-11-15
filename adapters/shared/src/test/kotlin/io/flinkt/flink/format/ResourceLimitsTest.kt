@@ -20,9 +20,11 @@ import java.io.InputStream
 import java.io.SequenceInputStream
 import java.lang.management.ManagementFactory
 import java.nio.ByteBuffer
+import java.time.Duration
 import org.apache.flink.core.memory.DataInputDeserializer
 import org.apache.flink.core.memory.DataOutputSerializer
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -379,6 +381,84 @@ class ResourceLimitsTest {
         )
         rejected(type("com.example.Labelled"), "com.example.Labelled can't be a Map key: it holds the enum com.example.Color at com.example.Tagged.color. An enum constant's $because")
         rejected(type("com.example.Listed"), "com.example.Listed can't be a Map key: it holds a kotlin.collections.List at com.example.Listed.points, and no key type holds a collection")
+    }
+
+    @Test
+    fun `the key check is linear in the schema, however many instantiations a generic key's value holds`() {
+        // D01<T>(a: D02<A<T>>, b: D02<B<T>>, c: D02<C<T>>), ..., D31<T>(value: T), and A, B and C<T>(value: T). A
+        // Map<D01<Long>, Boolean> nests 63 levels, within the budget, and a D01<Long> holds 3^30 instantiations of D31,
+        // one per word of A, B and C: a check that substituted the arguments of each would never finish.
+        val n = 31
+        fun d(i: Int) = "com.example.D%02d".format(i)
+        val wrappers = listOf("com.example.A", "com.example.B", "com.example.C")
+        val t = SchemaType.TypeParameter("T")
+        fun generic(name: String, argument: SchemaType) = SchemaType.ClassType(name, listOf(SchemaTypeArgument.invariant(argument)))
+        val declarations: Map<String, DeclarationSchema> = (1..n).associate { i ->
+            val fields = if (i < n) {
+                wrappers.map { FieldSchema(it.substringAfterLast('.').lowercase(), generic(d(i + 1), generic(it, t))) }
+            } else {
+                listOf(FieldSchema("value", t))
+            }
+            d(i) to RecordSchema(d(i), fields, listOf("T"))
+        } + wrappers.associateWith { RecordSchema(it, listOf(FieldSchema("value", t)), listOf("T")) } +
+            ("com.example.Color" to EnumSchema("com.example.Color", listOf(EnumConstantSchema("RED", 1))))
+        val key = generic(d(1), type("kotlin.Long"))
+        val schema = PersistedSchema.of(map(key, type("kotlin.Boolean"))) { declarations[it] }
+
+        assertTimeoutPreemptively(Duration.ofSeconds(60)) {
+            val allocated = allocatedBy { assertEquals(MapKeys.Counting.RECORDS_AND_VALUE_CLASSES, MapKeys.counting(key) { declarations[it] }) }
+            assertTrue(allocated < 1L shl 20, "checking the key type allocated $allocated bytes")
+
+            // With an enum argument, the check fails, naming the first path to it: each A's value, at the bottom.
+            val e = assertThrows<IllegalArgumentException> { MapKeys.counting(generic(d(1), type("com.example.Color"))) { declarations[it] } }
+            assertEquals(
+                "com.example.D01<com.example.Color> can't be a Map key: it holds the enum com.example.Color at " +
+                    "com.example.D01.${"a.".repeat(n - 1)}${"value.".repeat(n - 1)}value. An enum constant's hashCode() " +
+                    "is an identity hash code, which another JVM can compute differently, and a map's keys are counted " +
+                    "by hash code where it's written and where it's read. An enum or an object may be the key type " +
+                    "itself, or a subtype of a sealed key type",
+                e.message,
+            )
+
+            // The records a codec counts, which the planner keeps from reordering, are found in linear time too.
+            assertEquals(declarations.keys - "com.example.Color", MapKeys.countedRecords(schema))
+        }
+    }
+
+    @Test
+    fun `the records a codec counts are those a Map key holds, at any depth, through any use of a type parameter`() {
+        // Holder(keys: Map<Outer, Long>, plain: Plain, keyed: Keyed<Box<Inside>>, box: Box<Outside>), where
+        // Outer(point: Point), Keyed<K>(map: Map<K, Long>) and Box<T>(value: T).
+        fun record(name: String, vararg fields: Pair<String, SchemaType>, parameters: List<String> = emptyList()) =
+            RecordSchema(name, fields.map { (field, type) -> FieldSchema(field, type) }, parameters)
+        fun generic(name: String, argument: SchemaType) = SchemaType.ClassType(name, listOf(SchemaTypeArgument.invariant(argument)))
+        val int = type("kotlin.Int")
+        val declarations: Map<String, DeclarationSchema> = listOf(
+            record(
+                "com.example.Holder",
+                "keys" to map(type("com.example.Outer"), type("kotlin.Long")),
+                "plain" to type("com.example.Plain"),
+                "keyed" to generic("com.example.Keyed", generic("com.example.Box", type("com.example.Inside"))),
+                "box" to generic("com.example.Box", type("com.example.Outside")),
+            ),
+            record("com.example.Outer", "point" to type("com.example.Point")),
+            record("com.example.Point", "a" to int, "b" to int),
+            record("com.example.Plain", "n" to int),
+            record("com.example.Inside", "n" to int),
+            record("com.example.Outside", "n" to int),
+            record("com.example.Keyed", "map" to map(SchemaType.TypeParameter("K"), type("kotlin.Long")), parameters = listOf("K")),
+            record("com.example.Box", "value" to SchemaType.TypeParameter("T"), parameters = listOf("T")),
+        ).associateBy { it.typeName }
+        val schema = PersistedSchema.of(type("com.example.Holder")) { declarations[it] }
+
+        // Outer and Point are in a key, and so are Box and Inside, through Keyed's K. Box's T is in a key in that use,
+        // so its other use counts too: Outside is an over-approximation, which may keep a record from an as-is
+        // reorder, and never lets one through. Holder, Plain and Keyed hold maps or values, and no key holds them.
+        assertEquals(
+            setOf("com.example.Outer", "com.example.Point", "com.example.Box", "com.example.Inside", "com.example.Outside"),
+            MapKeys.countedRecords(schema),
+        )
+        assertEquals(emptySet<String>(), MapKeys.countedRecords(PersistedSchema.of(type("com.example.Plain")) { declarations[it] }))
     }
 
     private data class Point(val a: Int, val b: Int)

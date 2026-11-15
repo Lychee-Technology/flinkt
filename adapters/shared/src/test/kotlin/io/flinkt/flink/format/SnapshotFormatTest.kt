@@ -20,7 +20,6 @@ import org.apache.flink.core.memory.DataInputDeserializer
 import org.apache.flink.core.memory.DataOutputSerializer
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -37,7 +36,7 @@ class SnapshotFormatTest {
     fun `User's snapshot`() {
         val schema = PersistedSchema.of(type("com.example.User")) { mapOf("com.example.User" to userSchema)[it] }
         assertEquals(normalized(annotatedHex(USER_SNAPSHOT)), hex(schema.encoded))
-        assertEquals(120, schema.encoded.size)
+        assertEquals(132, schema.encoded.size)
 
         // Flink frames it: the snapshot class's name, the snapshot format version, then the data.
         val framed = DataOutputSerializer(64)
@@ -67,7 +66,7 @@ class SnapshotFormatTest {
     }
 
     @Test
-    fun `constants and subtypes are written in ID order, and fields in constructor order`() {
+    fun `constants and subtypes are written in ID order`() {
         val schema = PersistedSchema.of(envelopeOfUser) { everyShape[it] }
         assertEquals(listOf(1, 2, 7), (schema.declaration("com.example.Color") as EnumSchema).constants.map { it.id })
         assertEquals(listOf(1, 2), (schema.declaration("com.example.Event") as SealedSchema).subtypes.map { it.id })
@@ -75,13 +74,32 @@ class SnapshotFormatTest {
         // Declaring the constants in another order changes no snapshot byte.
         val redeclared = everyShape + ("com.example.Color" to EnumSchema("com.example.Color", colors.reversed()))
         assertArrayEquals(schema.encoded, PersistedSchema.of(envelopeOfUser) { redeclared[it] }.encoded)
+    }
 
-        // A constructor reorder is recorded: it changes the snapshot, and not the layout.
-        val reordered = everyShape + ("com.example.User" to RecordSchema("com.example.User", userSchema.fields.reversed()))
-        val other = PersistedSchema.of(envelopeOfUser) { reordered[it] }
-        assertNotEquals(hex(schema.encoded), hex(other.encoded))
-        assertTrue(schema.sameLayout(other, compareConstructorOrder = false))
-        assertTrue(!schema.sameLayout(other, compareConstructorOrder = true))
+    @Test
+    fun `a record's persisted order and constructor order are each recorded, neither derived from the other`() {
+        val schema = PersistedSchema.of(type("com.example.User")) { mapOf("com.example.User" to userSchema)[it] }
+
+        // Without @PersistedFieldOrder, a constructor reorder reorders the layout: the fields' list, then the
+        // constructor order, which names each field's position in it.
+        val reordered = RecordSchema("com.example.User", userSchema.fields.reversed())
+        val unpinned = PersistedSchema.of(type("com.example.User")) { mapOf("com.example.User" to reordered)[it] }
+        assertTrue(!schema.sameLayout(unpinned))
+        val layout = PersistedSchema.read(DataInputDeserializer(unpinned.encoded)).declaration("com.example.User") as RecordSchema
+        assertEquals(listOf("name", "id"), layout.persistedFields.map { it.name })
+
+        // With it, the same reorder keeps the persisted order: the layout is the same, and only the constructor
+        // order's positions change, from 0, 1 to 1, 0.
+        val pinned = RecordSchema("com.example.User", userSchema.fields.reversed(), persistedOrder = listOf("id", "name"))
+        val kept = PersistedSchema.of(type("com.example.User")) { mapOf("com.example.User" to pinned)[it] }
+        assertTrue(schema.sameLayout(kept))
+        assertEquals(hex(schema.encoded).replace("00 00 00 02 00 00 00 00 00 00 00 01", "00 00 00 02 00 00 00 01 00 00 00 00"), hex(kept.encoded))
+
+        // Both orders round-trip.
+        val read = PersistedSchema.read(DataInputDeserializer(kept.encoded)).declaration("com.example.User") as RecordSchema
+        assertEquals(listOf("name", "id"), read.fields.map { it.name })
+        assertEquals(listOf("id", "name"), read.persistedFields.map { it.name })
+        assertEquals(pinned, read)
     }
 
     @Test
@@ -91,13 +109,13 @@ class SnapshotFormatTest {
         val value = bytes(
             """
             01                                  Envelope's bitmap: previous is null
+            00 00 00 00 00 00 00 01 02 61       payload: User(1, "a")
             00 00 00 01 | 02 6b                 meta: one entry, key "k"
             00 00 00 03                         the List<Event?> value: three elements
             00                                  null
             01 00 00 00 01 00 00 00 01          an Event: UserEvent (1), then UserCreated (1)
-            00 00 00 02 00 00 00 00 00 00 00 05 UserCreated: color GREEN (2), userId 5
+            00 00 00 02 00 00 00 00 00 00 00 05 UserCreated, persisted as color, userId: GREEN (2), then 5
             01 00 00 00 02                      an Event: Shutdown (2), an object, so no payload
-            00 00 00 00 00 00 00 01 02 61       payload: User(1, "a")
             ee                                  the next byte
             """.let(::annotatedHex),
         )
@@ -110,10 +128,10 @@ class SnapshotFormatTest {
             val e = assertThrows<MalformedDataException> { SchemaWalker(schema).skipValue(envelopeOfUser, DataInputDeserializer(corrupt)) }
             assertEquals(message, e.message)
         }
-        fails({ it[20] = 9 }, "com.example.UserEvent has no subtype with ID 9")
-        fails({ it[24] = 3 }, "com.example.Color has no constant with ID 3")
-        fails({ it[7] = 0xff.toByte() }, "a collection size of -16777213")
-        fails({ it[12] = 2 }, "a null marker is 00 or 01, not 02")
+        fails({ it[30] = 9 }, "com.example.UserEvent has no subtype with ID 9")
+        fails({ it[34] = 3 }, "com.example.Color has no constant with ID 3")
+        fails({ it[17] = 0xff.toByte() }, "a collection size of -16777213")
+        fails({ it[21] = 2 }, "a null marker is 00 or 01, not 02")
     }
 
     @Test
@@ -124,8 +142,8 @@ class SnapshotFormatTest {
         val value = bytes(
             """
             00                                  Envelope's bitmap: previous is present
-            00 00 00 00                         meta: no entries
             00                                  payload, declared T: the argument's marker, null
+            00 00 00 00                         meta: no entries
             01 00 00 00 00 00 00 00 02 02 62    previous, declared T?: the argument's marker, then User(2, "b")
             """.let(::annotatedHex),
         )
@@ -173,7 +191,7 @@ class SnapshotFormatTest {
         val root = map(keyOfInt, map(type("kotlin.String"), type("kotlin.Long")))
         val keys = SchemaWalker(PersistedSchema.of(root) { declarations[it] })
         val nullKey = byteArrayOf(0)
-        // Canonical order: a, b, color. b is the bitmap's only bit.
+        // Persisted order: a, b, color, the constructor's. b is the bitmap's only bit.
         fun key(a: Int, b: String?, color: Int) = Bytes.of {
             writeByte(1); writeByte(if (b == null) 1 else 0); writeInt(a); b?.let { string(it) }; writeInt(color)
         }
@@ -229,6 +247,20 @@ class SnapshotFormatTest {
         fails(Bytes.snapshot(Bytes.type("kotlin.collections.List")), "kotlin.collections.List has 0 type arguments, and kotlin.collections.List takes 1")
         fails(Bytes.snapshot(Bytes.of { writeByte(1); string("kotlin.collections.List"); writeByte(0); writeInt(1); writeByte(0) }), "a star projection")
         fails(Bytes.snapshot(Bytes.type("com.example.User"), Bytes.record("com.example.User", "id" to Bytes.type("kotlin.Long"), "id" to Bytes.type("kotlin.Int"))), "two fields named id")
+        fun userWithConstructorOrder(vararg positions: Int) = Bytes.snapshot(
+            Bytes.type("com.example.User"),
+            Bytes.of {
+                writeByte(1); string("com.example.User"); writeInt(0)
+                writeInt(2); string("id"); write(Bytes.type("kotlin.Long")); writeInt(0); string("name"); write(Bytes.type("kotlin.String")); writeInt(0)
+                writeInt(positions.size); positions.forEach { writeInt(it) }
+                writeInt(0)
+            },
+        )
+        assertEquals(userSchema.fields.reversed(), (PersistedSchema.read(DataInputDeserializer(userWithConstructorOrder(1, 0))).declaration("com.example.User") as RecordSchema).fields)
+        fails(userWithConstructorOrder(0), "com.example.User has 2 fields, and its constructor order names 1")
+        fails(userWithConstructorOrder(0, 2), "com.example.User's constructor order names field 2 of 2")
+        fails(userWithConstructorOrder(0, -1), "com.example.User's constructor order names field -1 of 2")
+        fails(userWithConstructorOrder(1, 1), "com.example.User's constructor order names field 1 twice")
         fails(
             Bytes.snapshot(Bytes.type("com.example.Color"), Bytes.of { writeByte(3); string("com.example.Color"); writeInt(2); writeInt(2); string("B"); writeInt(1); string("A"); writeInt(0) }),
             "constant ID 1 follows 2",
@@ -251,6 +283,7 @@ class SnapshotFormatTest {
                 writeByte(1); string("com.example.User"); writeInt(0); writeInt(1)
                 string("id"); write(Bytes.type("kotlin.Long"))
                 writeInt(1); writeInt(tag); writeByte(if (critical) 1 else 0); writeInt(3); write(byteArrayOf(1, 2, 3))
+                writeInt(1); writeInt(0)
                 writeInt(0)
             },
         )
@@ -392,6 +425,7 @@ class SnapshotFormatTest {
             Bytes.of {
                 writeByte(1); string("com.example.Wide"); write(parameters)
                 writeInt(count); repeat(count) { string("f" + it.toString(36)); write(last); writeInt(0) }
+                writeInt(count); repeat(count) { writeInt(it) }
                 writeInt(0)
             },
             Bytes.of { writeByte(4); string("com.example.WideEvent"); write(parameters); writeInt(1); writeInt(1); write(wideOfLast); writeInt(0) },
@@ -421,6 +455,7 @@ class SnapshotFormatTest {
                 writeByte(1); string(record)
                 writeInt(count); repeat(count) { string("T" + it.toString(36)) }
                 writeInt(count); repeat(count) { string("f" + it.toString(36)); write(Bytes.type("kotlin.Long")); writeInt(0) }
+                writeInt(count); repeat(count) { writeInt(it) }
                 writeInt(0)
             },
         )
@@ -440,8 +475,13 @@ class SnapshotFormatTest {
 
     private val colors = listOf(EnumConstantSchema("BLUE", 7), EnumConstantSchema("RED", 1), EnumConstantSchema("GREEN", 2))
 
+    /** `UserCreated(userId: Long, color: Color)`, with `@PersistedFieldOrder` keys that persist it as `color`, `userId`. */
     private val userCreatedWithLong = mapOf(
-        "com.example.UserCreated" to RecordSchema("com.example.UserCreated", listOf(field("userId", "kotlin.Long"), field("color", "com.example.Color"))),
+        "com.example.UserCreated" to RecordSchema(
+            "com.example.UserCreated",
+            listOf(field("userId", "kotlin.Long"), field("color", "com.example.Color")),
+            persistedOrder = listOf("color", "userId"),
+        ),
     )
 
     /** Every planned shape: a generic record, collections, nullability at several levels, a value class, an enum, nested sealed types and an object. */
@@ -502,7 +542,7 @@ class SnapshotFormatTest {
             01 11 63 6f 6d 2e 65 78 61 6d 70 6c 65 2e 55 73 65 72
                                                 a record, com.example.User
             00 00 00 00                         no type parameters
-            00 00 00 02                         two fields, in constructor order
+            00 00 00 02                         two fields, in persisted order
             03 69 64                            id
             01 0c 6b 6f 74 6c 69 6e 2e 4c 6f 6e 67 00 00 00 00 00
                                                 kotlin.Long
@@ -511,6 +551,7 @@ class SnapshotFormatTest {
             01 0e 6b 6f 74 6c 69 6e 2e 53 74 72 69 6e 67 00 00 00 00 00
                                                 kotlin.String
             00 00 00 00                         no field attributes
+            00 00 00 02 00 00 00 00 00 00 00 01 constructor order: id is field 0, name field 1
             00 00 00 00                         no declaration attributes
             00 00 00 00                         no snapshot attributes
         """.trimIndent()
@@ -534,11 +575,13 @@ internal object Bytes {
 
     fun type(name: String): ByteArray = of { writeByte(1); string(name); writeByte(0); writeInt(0) }
 
+    /** A record whose constructor order is its persisted order. */
     fun record(name: String, vararg fields: Pair<String, ByteArray>): ByteArray = of {
         writeByte(1); string(name); writeInt(0); writeInt(fields.size)
         for ((field, type) in fields) {
             string(field); write(type); writeInt(0)
         }
+        writeInt(fields.size); fields.indices.forEach { writeInt(it) }
         writeInt(0)
     }
 

@@ -50,6 +50,35 @@ class SchemaTest {
     }
 
     @Test
+    fun `a record records its persisted order beside its constructor order, each in its own right`() {
+        // By default, a record is written in constructor order.
+        assertEquals(userSchema.fields, userSchema.persistedFields)
+
+        // An order its properties' @PersistedFieldOrder keys gave it is recorded, not derived from the names.
+        val pinned = RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("name", "id"))
+        assertEquals(listOf("id", "name"), pinned.fields.map { it.name })
+        assertEquals(listOf("name", "id"), pinned.persistedFields.map { it.name })
+        assertNotEquals(userSchema, pinned)
+        assertEquals("record io.flinkt.example.User(id: kotlin.Long, name: kotlin.String) persisted as (name, id)", pinned.toString())
+        assertImmutable(pinned.persistedFields)
+
+        // A constructor reorder that keeps the persisted order changes the constructor order only.
+        val reordered = RecordSchema(userSchema.typeName, userSchema.fields.reversed(), persistedOrder = listOf("id", "name"))
+        assertEquals(userSchema.persistedFields, reordered.persistedFields)
+        assertNotEquals(userSchema, reordered)
+
+        assertMessage("io.flinkt.example.User has 2 fields, and its persisted order names 1") {
+            RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("id"))
+        }
+        assertMessage("io.flinkt.example.User's persisted order names id twice") {
+            RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("id", "id"))
+        }
+        assertMessage("io.flinkt.example.User's persisted order names email, which isn't one of its fields") {
+            RecordSchema(userSchema.typeName, userSchema.fields, persistedOrder = listOf("id", "email"))
+        }
+    }
+
+    @Test
     fun `a generic declaration refers to its own type parameters only`() {
         val envelope = RecordSchema(
             "com.example.Envelope",

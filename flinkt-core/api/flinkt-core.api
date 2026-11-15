@@ -111,10 +111,11 @@ public final class io/flinkt/schema/ObjectSchema : io/flinkt/schema/DeclarationS
 }
 
 public final class io/flinkt/schema/RecordSchema : io/flinkt/schema/DeclarationSchema {
-	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getFields ()Ljava/util/List;
+	public final fun getPersistedFields ()Ljava/util/List;
 	public fun getTypeName ()Ljava/lang/String;
 	public fun getTypeParameters ()Ljava/util/List;
 	public fun hashCode ()I

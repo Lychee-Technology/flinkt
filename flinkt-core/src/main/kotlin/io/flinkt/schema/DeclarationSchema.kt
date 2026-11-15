@@ -23,23 +23,44 @@ public sealed class DeclarationSchema {
 
 /**
  * A class whose value is its primary constructor's properties, such as `data class User(val id: Long, val name: String)`.
+ *
+ * It records two orders of its fields, each in its own right: [fields] in constructor order, and [persistedFields] in
+ * the order a record is written. Neither is derived from the other, so a constructor reorder that keeps the persisted
+ * order keeps the layout, and one that doesn't changes it (docs/persisted-format.md, "Field order").
  */
 public class RecordSchema(
     override val typeName: String,
     /**
      * The persisted fields, in the order of the primary constructor's parameters. That order is how a value is
-     * constructed, and a data class's generated `hashCode()` follows it. The order fields are written in is #5's.
+     * constructed, and a data class's generated `hashCode()` follows it.
      */
     fields: List<FieldSchema>,
     typeParameters: List<String> = emptyList(),
+    /**
+     * The fields' names in the order a record is written: constructor order by default, or the order of the
+     * properties' `@PersistedFieldOrder` keys when they carry one. Each field is named once.
+     */
+    persistedOrder: List<String> = fields.map { it.name },
 ) : DeclarationSchema() {
     public val fields: List<FieldSchema> = fields.immutableCopy()
     override val typeParameters: List<String> = typeParameters.immutableCopy()
 
+    /** The persisted fields in the order a record is written, its null bitmap's bits included. */
+    public val persistedFields: List<FieldSchema>
+
     init {
         val declared = validate(typeName, this.typeParameters)
-        requireUnique(this.fields.map { it.name }) { "$typeName has two fields named $it" }
+        val byName = HashMap<String, FieldSchema>()
+        for (field in this.fields) require(byName.put(field.name, field) == null) { "$typeName has two fields named ${field.name}" }
         this.fields.forEach { requireDeclared(typeName, declared, it.type) }
+        val order = persistedOrder.immutableCopy()
+        require(order.size == this.fields.size) {
+            "$typeName has ${this.fields.size} fields, and its persisted order names ${order.size}"
+        }
+        requireUnique(order) { "$typeName's persisted order names $it twice" }
+        persistedFields = order.map { name ->
+            byName[name] ?: throw IllegalArgumentException("$typeName's persisted order names $name, which isn't one of its fields")
+        }.immutableCopy()
     }
 
     override fun equals(other: Any?): Boolean =
@@ -47,11 +68,17 @@ public class RecordSchema(
             other is RecordSchema &&
             typeName == other.typeName &&
             typeParameters == other.typeParameters &&
-            fields == other.fields
+            fields == other.fields &&
+            persistedFields == other.persistedFields
 
-    override fun hashCode(): Int = (typeName.hashCode() * 31 + typeParameters.hashCode()) * 31 + fields.hashCode()
+    override fun hashCode(): Int =
+        ((typeName.hashCode() * 31 + typeParameters.hashCode()) * 31 + fields.hashCode()) * 31 + persistedFields.hashCode()
 
-    override fun toString(): String = "record ${declaration(typeName, typeParameters)}(${fields.joinToString()})"
+    /** `record com.example.User(id: kotlin.Long, name: kotlin.String)`, with `persisted as (…)` when the orders differ. */
+    override fun toString(): String {
+        val record = "record ${declaration(typeName, typeParameters)}(${fields.joinToString()})"
+        return if (persistedFields == fields) record else "$record persisted as (${persistedFields.joinToString { it.name }})"
+    }
 }
 
 /** A property of a record or value class: its Kotlin property name and its full type. */

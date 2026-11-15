@@ -41,10 +41,10 @@ class RecordFormatTest {
             AccountCodec,
             Account(id = 7, name = "Ada", email = null, balance = doubleNaN, rating = floatNaN),
             """
-            02                          bitmap: balance present, email null, name present
-            7f f8 00 00 00 00 00 00     balance: every NaN is written canonical
+            02                          bitmap: name present, email null, balance present
             00 00 00 00 00 00 00 07     id
             04 41 64 61                 name
+            7f f8 00 00 00 00 00 00     balance: every NaN is written canonical
             7f c0 00 00                 rating
             """.let(::annotatedHex),
         )
@@ -56,12 +56,28 @@ class RecordFormatTest {
     }
 
     @Test
-    fun `a constructor reorder changes no bytes, because fields are written by name`() {
-        // Account's constructor order is id, name, email, balance, rating. Its bytes follow the names.
-        val value = Account(id = 1, name = "n", email = "e", balance = 2.0, rating = 3.0f)
+    fun `by default fields are written in constructor order, and PersistedFieldOrder's keys sort them otherwise`() {
+        // Account's constructor order is id, name, email, balance, rating, and so are its bytes.
         assertEquals(
-            normalized("00 | 40 00 00 00 00 00 00 00 | 02 65 | 00 00 00 00 00 00 00 01 | 02 6e | 40 40 00 00"),
-            AccountCodec.write(value).hex(),
+            normalized("00 | 00 00 00 00 00 00 00 01 | 02 6e | 02 65 | 40 00 00 00 00 00 00 00 | 40 40 00 00"),
+            AccountCodec.write(Account(id = 1, name = "n", email = "e", balance = 2.0, rating = 3.0f)).hex(),
+        )
+        // PinnedAccount's keys, rating 0, name 10, email 20, id 30 and balance 99, order its fields and its bitmap.
+        assertGolden(
+            PinnedAccountCodec,
+            PinnedAccount(id = 7, name = "Ada", email = null, balance = doubleNaN, rating = floatNaN),
+            """
+            02                          bitmap: name present, email null, balance present
+            7f c0 00 00                 rating
+            04 41 64 61                 name
+            00 00 00 00 00 00 00 07     id
+            7f f8 00 00 00 00 00 00     balance
+            """.let(::annotatedHex),
+        )
+        assertGolden(
+            PinnedAccountCodec,
+            PinnedAccount(id = 7, name = null, email = "e", balance = null, rating = -0.0f),
+            "05 | 80 00 00 00 | 02 65 | 00 00 00 00 00 00 00 07",
         )
     }
 
@@ -75,7 +91,7 @@ class RecordFormatTest {
         assertGolden(
             SessionCodec,
             Session(user = User(42, "Ada"), note = "hi", previous = User(41, "Al")),
-            "00 | 03 68 69 | 00 00 00 00 00 00 00 29 03 41 6c | 00 00 00 00 00 00 00 2a 04 41 64 61",
+            "00 | 00 00 00 00 00 00 00 2a 04 41 64 61 | 03 68 69 | 00 00 00 00 00 00 00 29 03 41 6c",
         )
     }
 
@@ -83,8 +99,8 @@ class RecordFormatTest {
     fun `nine nullable fields take two bitmap bytes, least significant bit first`() {
         val allNull = Wide(null, null, null, null, null, null, null, null, null)
         assertGolden(WideCodec, allNull, "ff 01")
-        assertGolden(WideCodec, allNull.copy(a = true), "fe 01 | 01")
-        assertGolden(WideCodec, allNull.copy(i = false), "ff 00 | 00")
+        assertGolden(WideCodec, allNull.copy(a = true), "ff 00 | 01")
+        assertGolden(WideCodec, allNull.copy(i = false), "fe 01 | 00")
         assertGolden(WideCodec, Wide(true, true, true, true, true, true, true, true, true), "00 00 | 01 01 01 01 01 01 01 01 01")
     }
 
@@ -97,15 +113,15 @@ class RecordFormatTest {
                 d = Double.MIN_VALUE, c = '\uD800', t = "\uDE00",
             ),
             """
+            01                          z
             ff                          b
-            d8 00                       c: an unpaired surrogate
-            00 00 00 00 00 00 00 01     d
-            80 00 00 00                 f: negative zero
+            80 00                       s
             80 00 00 00                 i
             7f ff ff ff ff ff ff ff     l
-            80 00                       s
+            80 00 00 00                 f: negative zero
+            00 00 00 00 00 00 00 01     d
+            d8 00                       c: an unpaired surrogate
             02 80 bc 03                 t: an unpaired low surrogate
-            01                          z
             """.let(::annotatedHex),
         )
         assertGolden(
@@ -115,7 +131,7 @@ class RecordFormatTest {
                 f = Float.NEGATIVE_INFINITY, d = doubleNaN, c = Char.MAX_VALUE, t = "",
             ),
             """
-            7f | ff ff | 7f f8 00 00 00 00 00 00 | ff 80 00 00 | 7f ff ff ff | 80 00 00 00 00 00 00 00 | 7f ff | 01 | 00
+            00 | 7f | 7f ff | 7f ff ff ff | 80 00 00 00 00 00 00 00 | ff 80 00 00 | 7f f8 00 00 00 00 00 00 | ff ff | 01
             """.let(::annotatedHex),
         )
     }
@@ -131,12 +147,12 @@ class RecordFormatTest {
     fun `a field declared T? has a bitmap bit, and after a clear bit a nullable argument's marker is 01, never 00`() {
         val first = "00 00 00 00 00 00 00 01 02 61"
         val second = "00 00 00 00 00 00 00 02 02 62"
-        // Canonical order: previous, then value. The bitmap is the same whatever the argument is.
+        // Persisted order: value, then previous. The bitmap is the same whatever the argument is.
         val nullable = BoxCodec(NullableCodec(UserCodec))
-        assertGolden(nullable, Box<User?>(User(1, "a"), User(2, "b")), "00 | 01 $second | 01 $first")
-        assertGolden(nullable, Box<User?>(null, User(2, "b")), "00 | 01 $second | 00")
+        assertGolden(nullable, Box<User?>(User(1, "a"), User(2, "b")), "00 | 01 $first | 01 $second")
+        assertGolden(nullable, Box<User?>(null, User(2, "b")), "00 | 00 | 01 $second")
         assertGolden(nullable, Box<User?>(null, null), "01 | 00")
-        assertGolden(BoxCodec(UserCodec), Box(User(1, "a"), User(2, "b")), "00 | $second | $first")
+        assertGolden(BoxCodec(UserCodec), Box(User(1, "a"), User(2, "b")), "00 | $first | $second")
         assertGolden(BoxCodec(UserCodec), Box(User(1, "a"), null), "01 | $first")
 
         // A clear bit, then 00, would be a second encoding of a null previous, which is written 01 | 00.
@@ -221,9 +237,12 @@ class RecordFormatTest {
             val e = assertThrows<MalformedDataException>(hex) { codec.deserialize(DataInputDeserializer(bytes(hex))) }
             assertTrue(message in e.message.orEmpty(), "${e.message}")
         }
-        val scalars = "ff | d8 00 | 00 00 00 00 00 00 00 01 | 80 00 00 00 | 80 00 00 00 | 7f ff ff ff ff ff ff ff | 80 00 | 01 | "
-        fails(ScalarsCodec, scalars + "02", "a Boolean is 00 or 01, not 02")
-        fails(ScalarsCodec, "ff d8 00 7f f0 00 00 00 00 00 01", "a Double NaN is written as 7f f8 00 00 00 00 00 00, not 7f f0 00 00 00 00 00 01")
+        fails(ScalarsCodec, "02", "a Boolean is 00 or 01, not 02")
+        fails(
+            ScalarsCodec,
+            "01 | ff | 80 00 | 80 00 00 00 | 7f ff ff ff ff ff ff ff | 80 00 00 00 | 7f f0 00 00 00 00 00 01",
+            "a Double NaN is written as 7f f8 00 00 00 00 00 00, not 7f f0 00 00 00 00 00 01",
+        )
         fails(WideCodec, "ff 03", "has bit 9 set")
         fails(AccountCodec, "08", "Account's null bitmap has 3 bits, not 08")
         fails(NullableCodec(UserCodec), "02", "a null marker is 00 or 01, not 02")
@@ -263,11 +282,11 @@ data class DoubleKey(val value: Double) {
 data class CompositeKey(val name: String, val id: Long) {
     companion object {
         val CODEC = key<CompositeKey>({
-            RecordFormat.writeLong(it, id)
             RecordFormat.writeString(it, name)
+            RecordFormat.writeLong(it, id)
         }) {
-            val id = RecordFormat.readLong(it)
-            CompositeKey(RecordFormat.readString(it), id)
+            val name = RecordFormat.readString(it)
+            CompositeKey(name, RecordFormat.readLong(it))
         }
     }
 }

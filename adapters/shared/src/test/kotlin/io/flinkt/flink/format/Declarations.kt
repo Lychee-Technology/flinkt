@@ -38,6 +38,7 @@ object Declarations {
         import io.flinkt.codec.GeneratedCodec
         import io.flinkt.codec.codec
         import io.flinkt.flink.format.MigrationConstructor
+        import io.flinkt.flink.format.PersistedFieldOrder
         import io.flinkt.flink.format.RecordFormat
         import io.flinkt.registry.GeneratedTypeModule
         import io.flinkt.registry.MutableTypeRegistry
@@ -143,22 +144,22 @@ object Declarations {
             override fun copy(value: Address): Address = value
         }
 
-        // Canonical order: bio, home, score. The bitmap: bio is bit 0, home bit 1.
+        // Persisted order: bio, score, home, the constructor's. The bitmap: bio is bit 0, home bit 1.
         class OldProfileCodec(private val address: GeneratedCodec<Address>) : GeneratedCodec<OldProfile> {
             override fun serialize(value: OldProfile, output: DataOutput) {
                 val bio = value.bio
                 val home = value.home
                 output.writeByte((if (bio == null) 1 else 0) or (if (home == null) 2 else 0))
                 if (bio != null) RecordFormat.writeString(output, bio)
-                if (home != null) address.serialize(home, output)
                 RecordFormat.writeDouble(output, value.score)
+                if (home != null) address.serialize(home, output)
             }
 
             override fun deserialize(input: DataInput): OldProfile {
                 val nulls = input.readUnsignedByte()
                 val bio = if (nulls and 1 != 0) null else RecordFormat.readString(input)
-                val home = if (nulls and 2 != 0) null else address.deserialize(input)
                 val score = RecordFormat.readDouble(input)
+                val home = if (nulls and 2 != 0) null else address.deserialize(input)
                 return OldProfile(bio = bio, score = score, home = home)
             }
 
@@ -269,14 +270,63 @@ object Declarations {
         }
     """
 
-    /** `Key(a: Int, b: Int)`, with an `init` block that checks both arguments. */
-    val KEY_AB = key("val a: Int, val b: Int", "Key(a = a, b = b)", "Key(1, 2)", "arguments[0] as Int, arguments[1] as Int")
+    /** `Key(a: Int, b: Int)`, with an `init` block that checks both arguments. Persisted order: the constructor's. */
+    val KEY_AB = key(listOf("a", "b"))
 
-    /** The same key with its constructor parameters reordered: `Key(b: Int, a: Int)`. */
-    val KEY_BA = key("val b: Int, val a: Int", "Key(b = b, a = a)", "Key(2, 1)", "arguments[0] as Int, arguments[1] as Int")
+    /** The same key with its constructor parameters reordered, `Key(b: Int, a: Int)`, which reorders its layout too. */
+    val KEY_BA = key(listOf("b", "a"))
 
-    private fun key(parameters: String, construct: String, sample: String, arguments: String): String {
-        val fields = parameters.split(", ").map { it.removePrefix("val ").substringBefore(':') }
+    /** `Key(a: Int, b: Int)` with `@PersistedFieldOrder` keys 10 and 20: persisted order `a`, `b`, as [KEY_AB]'s. */
+    val KEY_AB_PINNED = key(listOf("a", "b"), mapOf("a" to 10, "b" to 20))
+
+    /** `Key(b: Int, a: Int)`, its keys renumbered to 7 and 3: persisted order `a`, `b` still, a constructor reorder only. */
+    val KEY_BA_PINNED = key(listOf("b", "a"), mapOf("b" to 7, "a" to 3))
+
+    /**
+     * `Holder(keys: Map<Key, Boolean>)`, with [KEY_AB_PINNED]'s key, and a sample of 1,025 keys `Key(-31 * i, i)`: their
+     * hash codes, `31 * a + b`, are `-960 * i`, all different. A constructor reorder makes them `31 * b + a`, all 0.
+     */
+    val HOLDER_AB_PINNED = key(listOf("a", "b"), mapOf("a" to 10, "b" to 20), holder = true)
+
+    /** [HOLDER_AB_PINNED] with the key's constructor reordered, as [KEY_BA_PINNED] is: its keys' hash codes change. */
+    val HOLDER_BA_PINNED = key(listOf("b", "a"), mapOf("b" to 7, "a" to 3), holder = true)
+
+    /** [HOLDER_AB_PINNED] with its keys renumbered to 1 and 1,000, which changes no order: an identical schema. */
+    val HOLDER_AB_RENUMBERED = key(listOf("a", "b"), mapOf("a" to 1, "b" to 1_000), holder = true)
+
+    /**
+     * `Key`, with the constructor parameters [constructor], and `@PersistedFieldOrder` keys [pins] if any. Its codec
+     * writes the persisted order, which is the constructor's without pins, reads each field into a local in that
+     * order, and then calls the constructor once, by name. With [holder], the module also has `Holder`, whose map's
+     * keys its codec counts by hash code, and its sample is a `Holder`.
+     */
+    private fun key(constructor: List<String>, pins: Map<String, Int>? = null, holder: Boolean = false): String {
+        val persisted = pins?.entries?.sortedBy { it.value }?.map { it.key } ?: constructor
+        val parameters = constructor.joinToString { name -> (pins?.get(name)?.let { "@property:PersistedFieldOrder(order = $it) " } ?: "") + "val $name: Int" }
+        val schema = "RecordSchema(\"com.example.Key\", listOf(${constructor.joinToString { "FieldSchema(\"$it\", type(\"kotlin.Int\"))" }}), " +
+            "persistedOrder = listOf(${persisted.joinToString { "\"$it\"" }}))"
+        val holderDeclarations = if (!holder) "" else """
+            @FlinkType
+            data class Holder(val keys: Map<Key, Boolean>)
+
+            class HolderCodec(private val key: GeneratedCodec<Key>) : GeneratedCodec<Holder> {
+                override fun serialize(value: Holder, output: DataOutput) =
+                    RecordFormat.writeMap(output, value.keys, { out, k -> key.serialize(k, out) }, RecordFormat::writeBoolean) { true }
+
+                override fun deserialize(input: DataInput): Holder =
+                    Holder(keys = RecordFormat.readMap(input, { key.deserialize(it) }, RecordFormat::readBoolean) { true })
+
+                override fun copy(value: Holder): Holder = value
+            }
+        """
+        val holderRegistration = if (!holder) "" else """
+                    val keys = SchemaType.ClassType(
+                        "kotlin.collections.Map",
+                        listOf(io.flinkt.schema.SchemaTypeArgument.invariant(type("com.example.Key")), io.flinkt.schema.SchemaTypeArgument.invariant(type("kotlin.Boolean"))),
+                    )
+                    registry.register(Holder::class, RecordSchema("com.example.Holder", listOf(FieldSchema("keys", keys))), CodecFactory { context -> HolderCodec(context.codec<Key>()) })
+        """
+        val sample = if (holder) "Holder((0..1024).associate { Key(a = -31 * it, b = it) to true })" else "Key(a = 1, b = 2)"
         return """
             @FlinkType
             data class Key($parameters) {
@@ -285,34 +335,29 @@ object Declarations {
                 }
             }
 
-            // Canonical order: a, b, whatever the constructor order. Each is read into a local, then the constructor
-            // is called once.
+            // Persisted order: ${persisted.joinToString()}. Each field is read into a local, then the constructor is
+            // called once.
             object KeyCodec : GeneratedCodec<Key>, MigrationConstructor<Key> {
                 override fun serialize(value: Key, output: DataOutput) {
-                    RecordFormat.writeInt(output, value.a)
-                    RecordFormat.writeInt(output, value.b)
+                    ${persisted.joinToString("\n                    ") { "RecordFormat.writeInt(output, value.$it)" }}
                 }
 
                 override fun deserialize(input: DataInput): Key {
-                    val a = RecordFormat.readInt(input)
-                    val b = RecordFormat.readInt(input)
-                    return $construct
+                    ${persisted.joinToString("\n                    ") { "val $it = RecordFormat.readInt(input)" }}
+                    return Key(${constructor.joinToString { "$it = $it" }})
                 }
 
                 override fun copy(value: Key): Key = value
 
-                override val parameterNames = listOf(${fields.joinToString { "\"$it\"" }})
+                override val parameterNames = listOf(${constructor.joinToString { "\"$it\"" }})
 
-                override fun construct(arguments: Array<Any?>): Key = Key($arguments)
+                override fun construct(arguments: Array<Any?>): Key = Key(arguments[0] as Int, arguments[1] as Int)
             }
-
+            $holderDeclarations
             class Types : GeneratedTypeModule {
                 override fun register(registry: MutableTypeRegistry) {
-                    registry.register(
-                        Key::class,
-                        RecordSchema("com.example.Key", listOf(${fields.joinToString { "FieldSchema(\"$it\", type(\"kotlin.Int\"))" }})),
-                        CodecFactory { KeyCodec },
-                    )
+                    registry.register(Key::class, $schema, CodecFactory { KeyCodec })
+                    $holderRegistration
                 }
             }
 
