@@ -22,6 +22,13 @@ import io.flinkt.schema.ValueClassSchema
  * are rejected. An enum constant or an object can still be the key itself, as the key type or a subtype of a sealed
  * key type. A map holds each such key at most once, so it isn't counted.
  *
+ * That alone doesn't bound what objects cost a map's read. A data object's generated `hashCode()` is its qualified
+ * name's, so data objects whose names share a hash code, such as `Signal.AaAa` and `Signal.BBBB`, share one too, and
+ * `HashMap` compares each of them with every earlier one. So a key type holds at most [MAX_OBJECTS] objects, as the key
+ * type or as subtypes of a sealed key type at any level, whether they're data objects or not. An enum's constants
+ * aren't limited: their hash codes are identity hash codes, which the JVM picks, and neither a declaration nor the
+ * bytes can make two share one.
+ *
  * The check never substitutes a type argument into a declaration. Each declaration is checked once, as a function of
  * its type arguments: what it holds whatever they are, and which of its type parameters' arguments are components of
  * it. A use of the declaration then checks only those arguments, where they're written. So the work is linear in the
@@ -29,6 +36,13 @@ import io.flinkt.schema.ValueClassSchema
  * (docs/persisted-format.md, "Validation and budgets").
  */
 object MapKeys {
+    /**
+     * The budget on the objects a `Map` key type holds: the key type, if it's an object, and the object subtypes of a
+     * sealed key type at every level. A map holds each at most once, and they aren't counted by hash code, so this is
+     * what bounds how many earlier objects a key's insert is compared with.
+     */
+    const val MAX_OBJECTS: Int = 1 shl 10
+
     enum class Counting {
         /**
          * A built-in or an enum, with or without `?`: no key is counted. `HashMap` orders a built-in's keys that share
@@ -39,14 +53,15 @@ object MapKeys {
 
         /**
          * A record, a value class or a sealed type, with or without `?`: each key that's a record or a value class is
-         * counted, and an enum constant, an object and `null` aren't.
+         * counted, and an enum constant, an object and `null` aren't. The key type holds at most [MAX_OBJECTS] objects.
          */
         RECORDS_AND_VALUE_CLASSES,
     }
 
     /**
      * How [key]'s values are counted, with each declaration found by [declarations]. Fails if [key] holds an enum or
-     * an object inside a record or a value class, or holds a collection anywhere.
+     * an object inside a record or a value class, holds a collection anywhere, or holds more than [MAX_OBJECTS]
+     * objects.
      */
     fun counting(key: SchemaType.ClassType, declarations: (String) -> DeclarationSchema?): Counting {
         Checker(key, declarations).check()
@@ -122,8 +137,17 @@ object MapKeys {
         private val asKey = HashMap<String, Summary>()
         private val inProgress = HashSet<String>()
 
+        /** The objects found where the key is: the key type itself, or a sealed key type's subtype at any level. */
+        private val objects = LinkedHashSet<String>()
+
         fun check() {
             use(root, Position.KEY, Path.Here, parameters = emptyMap(), uses = LinkedHashMap(), depth = 1)?.let { throw it.exception(root) }
+            require(objects.size <= MAX_OBJECTS) {
+                "$root can't be a Map key: it has ${objects.size} objects among its values, such as ${objects.first()}, " +
+                    "over the budget of $MAX_OBJECTS. A map holds each object once and doesn't count them by hash " +
+                    "code, but a data object's hashCode() is its qualified name's, which other data objects can share, " +
+                    "and a map compares a key with every earlier key of its hash code"
+            }
         }
 
         /**
@@ -157,7 +181,12 @@ object MapKeys {
                     }
                 }
                 is EnumSchema -> return if (position == Position.KEY) null else identityHash(path, "the enum ${type.name}", "An enum constant's")
-                is ObjectSchema -> return if (position == Position.KEY) null else identityHash(path, "the object ${type.name}", "An object's")
+                is ObjectSchema -> return if (position == Position.KEY) {
+                    objects += type.name
+                    null
+                } else {
+                    identityHash(path, "the object ${type.name}", "An object's")
+                }
                 is RecordSchema, is ValueClassSchema -> {
                     summary = componentSummary(declaration, depth + 1)
                     // The key, or a sealed key type's subtype, is where a path starts: at its type name.

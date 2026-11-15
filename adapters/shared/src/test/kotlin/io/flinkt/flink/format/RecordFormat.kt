@@ -359,9 +359,10 @@ object RecordFormat {
      *
      * Inserting a key into the `LinkedHashMap` compares it with the earlier keys of its hash code, all of them when
      * its class isn't `Comparable`. The read fails at the first key that makes one hash code's count one too many,
-     * so each insert compares a counted key with at most [MAX_KEYS_PER_HASH_CODE] counted keys, plus the uncounted
-     * ones, at most one per enum constant or object of the key type. Up to [MAX_KEYS_PER_HASH_CODE] keys no hash code
-     * can be over, so a map that size counts nothing. Past it, each counted key's hash code is counted once more.
+     * so each insert compares a key with at most [MAX_KEYS_PER_HASH_CODE] counted keys of its hash code, plus the
+     * uncounted ones: at most [MapKeys.MAX_OBJECTS] objects, which [MapKeys.counting] limits for the key type, the enum
+     * constants that share its identity hash code, and `null`. Up to [MAX_KEYS_PER_HASH_CODE] keys no hash code can be
+     * over, so a map that size counts nothing. Past it, each counted key's hash code is counted once more.
      */
     @JvmStatic
     @JvmOverloads

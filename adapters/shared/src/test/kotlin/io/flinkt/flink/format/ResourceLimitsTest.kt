@@ -333,6 +333,95 @@ class ResourceLimitsTest {
     }
 
     @Test
+    fun `a Map key type holds at most 1,024 objects, because data objects whose names share a hash code share one`() {
+        // A data object's generated hashCode() is its qualified name's. "Aa" and "BB" hash alike, so names of one length
+        // made of them do, and so do the objects: eight distinct keys of one hash code, which a map holds once each.
+        val signals = listOf(
+            Signal.AaAaAa, Signal.AaAaBB, Signal.AaBBAa, Signal.AaBBBB, Signal.BBAaAa, Signal.BBAaBB, Signal.BBBBAa, Signal.BBBBBB,
+        )
+        assertEquals(8, signals.toSet().size)
+        assertEquals(setOf("io.flinkt.flink.format.ResourceLimitsTest.Signal.AaAaAa".hashCode()), signals.map { it.hashCode() }.toSet())
+
+        // A sealed key type of such objects, beside a record subtype, and optionally a nested sealed type that holds
+        // more of them. 13 pairs of letters name 8,192 objects of one hash code.
+        fun signal(i: Int) = "com.example.Signal$" + (0 until 13).joinToString("") { if (i shr it and 1 == 0) "Aa" else "BB" }
+        assertEquals(1, (0 until 8192).map { signal(it).hashCode() }.toSet().size)
+        fun counting(objects: Int, nested: Int = 0, nullable: Boolean = false): MapKeys.Counting {
+            val names = (0 until objects + nested).map(::signal)
+            val declarations = HashMap<String, DeclarationSchema>()
+            names.forEach { declarations[it] = ObjectSchema(it) }
+            declarations["com.example.Move"] = RecordSchema("com.example.Move", listOf(FieldSchema("x", type("kotlin.Int"))))
+            val subtypes = names.take(objects).map { type(it) } + type("com.example.Move") +
+                if (nested > 0) listOf(type("com.example.More")) else emptyList()
+            if (nested > 0) {
+                declarations["com.example.More"] =
+                    SealedSchema("com.example.More", names.drop(objects).mapIndexed { i, name -> SealedSubtypeSchema(i + 1, type(name)) })
+            }
+            declarations["com.example.Signal"] = SealedSchema("com.example.Signal", subtypes.mapIndexed { i, t -> SealedSubtypeSchema(i + 1, t) })
+            return MapKeys.counting(type("com.example.Signal", nullable)) { declarations[it] }
+        }
+        val because = "over the budget of 1024. A map holds each object once and doesn't count them by hash code, but a " +
+            "data object's hashCode() is its qualified name's, which other data objects can share, and a map compares a " +
+            "key with every earlier key of its hash code"
+
+        // 1,024 objects are within the budget, at one level or across two, and an object may be the key type itself.
+        assertEquals(MapKeys.Counting.RECORDS_AND_VALUE_CLASSES, counting(1024))
+        assertEquals(MapKeys.Counting.RECORDS_AND_VALUE_CLASSES, counting(1000, nested = 24))
+        assertEquals(MapKeys.Counting.NONE, MapKeys.counting(type(signal(0))) { ObjectSchema(it) })
+
+        // One more fails when the codec is created, at either level and with or without ?, and so do the 8,192 of
+        // the review's probe, whose map of every object a read without the budget compared 33.6 million times.
+        for ((objects, nested, nullable) in listOf(Triple(1025, 0, false), Triple(1000, 25, false), Triple(1025, 0, true))) {
+            val e = assertThrows<IllegalArgumentException> { counting(objects, nested, nullable) }
+            val root = if (nullable) "com.example.Signal?" else "com.example.Signal"
+            assertEquals("$root can't be a Map key: it has 1025 objects among its values, such as ${signal(0)}, $because", e.message)
+        }
+        val e = assertThrows<IllegalArgumentException> { counting(8192) }
+        assertEquals("com.example.Signal can't be a Map key: it has 8192 objects among its values, such as ${signal(0)}, $because", e.message)
+    }
+
+    @Test
+    fun `the budget on a key type's objects bounds what they cost a map's read, which grows with their square without it`() {
+        // Keys that stand for data objects of one hash code, as Signal's are, and count the equals() calls the map
+        // makes, which a data object's own equals() can't. Records of the same hash code are CountedKeys. A map holds
+        // each object once and doesn't count them by hash code, so without the budget a read of n objects compares
+        // each with every earlier one: n * (n - 1) / 2 calls, and a few per key on the way down the bin's tree.
+        val objects = Array(8192) { CountedObject(it) }
+        fun read(bytes: ByteArray): Map<Any, Boolean> = RecordFormat.readMap(
+            DataInputDeserializer(bytes),
+            { input -> if (input.readBoolean()) CountedKey(input.readInt(), input.readInt()) else objects[input.readInt()] },
+            RecordFormat::readBoolean,
+        ) { it is CountedKey }
+        fun entries(objectCount: Int, records: Int) = Bytes.of {
+            writeInt(objectCount + records)
+            for (i in 0 until objectCount) { writeBoolean(false); writeInt(i); writeByte(1) }
+            for (i in 0 until records) { writeBoolean(true); writeInt(i); writeInt(-31 * i); writeByte(1) }
+        }
+        fun comparisons(block: () -> Unit): Long {
+            CountedKey.comparisons = 0
+            CountedObject.comparisons = 0
+            block()
+            return CountedKey.comparisons + CountedObject.comparisons
+        }
+        for (n in listOf(2048, 4096, 8192)) {
+            val made = comparisons { assertEquals(n, read(entries(n, records = 0)).size) }
+            val pairs = n.toLong() * (n - 1) / 2
+            assertTrue(made in pairs until pairs + 64L * n, "a read of $n objects made $made comparisons")
+        }
+
+        // The most a key type within the budgets allows under one hash code: 1,024 objects and 1,024 records. Each
+        // key is compared with at most the 2,047 others.
+        val worst = comparisons { assertEquals(2048, read(entries(1024, records = 1024)).size) }
+        val pairs = 2048L * 2047 / 2
+        assertTrue(worst in pairs until pairs + 64L * 2048, "1,024 objects and 1,024 records of one hash code made $worst comparisons")
+
+        // A map holds an object once, and the objects don't count toward the records' budget.
+        val twice = Bytes.of { writeInt(2); repeat(2) { writeBoolean(false); writeInt(7); writeByte(1) } }
+        assertEquals("a map holds the key CountedObject(7) twice", assertThrows<MalformedDataException> { read(twice) }.message)
+        assertThrows<MalformedDataException> { read(entries(1024, records = 1025)) }
+    }
+
+    @Test
     fun `a key's hash code is the same where it's written and where it's read, so no enum or object is inside a record of it`() {
         // A record's generated hashCode() combines its components' hash codes. An enum constant's is an identity hash
         // code, which another JVM can compute differently, so a writer's count of such keys isn't its reader's.
@@ -481,6 +570,41 @@ class ResourceLimitsTest {
         companion object {
             var comparisons = 0L
         }
+    }
+
+    /** Stands for a data object whose hash code is 0, as [CountedKey]'s colliding keys' is, and counts the `equals()` calls a map makes. */
+    private class CountedObject(private val id: Int) {
+        override fun equals(other: Any?): Boolean {
+            comparisons++
+            return other === this
+        }
+
+        override fun hashCode(): Int = 0
+
+        override fun toString(): String = "CountedObject($id)"
+
+        companion object {
+            var comparisons = 0L
+        }
+    }
+
+    /** Data objects named with "Aa" and "BB", which hash alike, so the eight names, and the eight objects, share one hash code. */
+    private sealed interface Signal {
+        data object AaAaAa : Signal
+
+        data object AaAaBB : Signal
+
+        data object AaBBAa : Signal
+
+        data object AaBBBB : Signal
+
+        data object BBAaAa : Signal
+
+        data object BBAaBB : Signal
+
+        data object BBBBAa : Signal
+
+        data object BBBBBB : Signal
     }
 
     /** [CountedKey], but `Comparable` to itself, so `HashMap` orders keys that share a hash code. */
