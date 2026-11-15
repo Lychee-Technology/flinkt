@@ -170,6 +170,16 @@ Each is one comparison on a path the codec takes anyway. Flink's own readers acc
 
 A corrupt or hostile input must fail with an error, not exhaust memory, stack or time. Structural checks, above, are always enforced. Resource budgets are limits on legitimate values too, so each one is enforced where the value is written as well as where it's read: a release never writes what it would refuse to read, and a checkpoint it completed stays readable.
 
+**Threat model.** The limits below defend against one attacker, so a finding can be judged against it:
+
+- **The bytes are untrusted.** A record, and the snapshot beside it, may be corrupt or written by an attacker, who can choose every byte, including which declared enum constants, objects and subtypes a value names.
+- **The declarations are not.** The current classpath's declarations are compiled into the job by its developers. Someone who can change them can already run code in the job, which no format check prevents. A snapshot's old schema is bytes, so it's untrusted, and the snapshot reader checks it ([Validation and budgets](#validation-and-budgets)).
+- **The guarantee.** Reading fails with an error or returns a value. It never exhausts the stack, allocates at most a constant factor of the bytes it consumed, and its work is linear in those bytes, apart from a `Map`'s keys, each of which is compared with a number of others that the declarations and the budgets bound ([What a value can cost](#resource-limits)).
+- **The bound doesn't depend on how names hash.** It holds for every declaration the rules accept, names chosen to collide included. The limit on a key type's objects is what makes that so. The model doesn't require it, but it's checked once per serializer and costs nothing per record, so the bound can be stated without assuming the names are benign.
+- **Out of scope:** what the job's own code does with a decoded value (a `LinkedHashMap` it fills with the same keys pays the same comparisons), Flink's own serializers, the state backends, and volume: a value is bounded by what Flink hands the serializer, not by a Flinkt budget.
+
+So a new limit is needed only for an input inside this model: bytes an attacker writes against declarations the rules accept, which break a bound this section states. A slower read that stays within the stated bound isn't a defect.
+
 | Limit | Version 1 | Written | Read |
 |---|---|---|---|
 | a `String`'s length | 67,108,864 chars, 2^26 | `serialize` fails before writing it | fails at the length, before reading a char |
