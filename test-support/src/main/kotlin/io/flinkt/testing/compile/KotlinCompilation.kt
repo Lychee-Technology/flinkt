@@ -46,7 +46,15 @@ public class KotlinCompilation(
         val ksp = if (kspProcessorClasspath.isEmpty()) {
             null
         } else {
-            KspRunner.run(compiler, sourceRoot, classpath, kspProcessorClasspath, kspProcessorOptions, File(root, "ksp"))
+            KspRunner.run(
+                compiler,
+                sourceRoot,
+                classpath,
+                kspProcessorClasspath,
+                kspProcessorOptions,
+                compilerArguments,
+                File(root, "ksp"),
+            )
         }
         val kspDiagnostics = ksp?.let { Diagnostics.parseKsp(it.output, sourceRoot) }.orEmpty()
         if (ksp != null && (ksp.exitCode != 0 || kspDiagnostics.any { it.severity == Severity.ERROR })) {

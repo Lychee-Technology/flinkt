@@ -17,11 +17,22 @@ import com.google.devtools.ksp.symbol.KSClassDeclaration
  */
 class GreetingProcessorProvider : SymbolProcessorProvider {
     override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor =
-        GreetingProcessor(environment.codeGenerator, environment.logger)
+        GreetingProcessor(environment.codeGenerator, environment.logger, environment.options, environment.kotlinVersion)
 }
 
-private class GreetingProcessor(private val codeGenerator: CodeGenerator, private val logger: KSPLogger) : SymbolProcessor {
+private class GreetingProcessor(
+    private val codeGenerator: CodeGenerator,
+    private val logger: KSPLogger,
+    private val options: Map<String, String>,
+    private val kotlinVersion: KotlinVersion,
+) : SymbolProcessor {
+    private var warned = false
+
     override fun process(resolver: Resolver): List<KSAnnotated> {
+        if (!warned && options["logKotlinVersion"] == "true") {
+            warned = true
+            logger.warn("ksp kotlinVersion=$kotlinVersion")
+        }
         for (symbol in resolver.getSymbolsWithAnnotation("sample.Greet")) {
             val declaration = symbol as? KSClassDeclaration
             if (declaration == null || declaration.classKind != ClassKind.CLASS) {

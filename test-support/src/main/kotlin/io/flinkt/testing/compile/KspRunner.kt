@@ -19,11 +19,14 @@ internal object KspRunner {
         classpath: List<File>,
         processors: List<File>,
         options: Map<String, String>,
+        compilerArguments: List<String>,
         outputDir: File,
     ): KspRun {
         val kotlinDir = File(outputDir, "kotlin")
         val resourcesDir = File(outputDir, "resources")
         val separator = File.pathSeparator
+        val languageVersion = optionValue(compilerArguments, "-language-version") ?: compiler.languageVersion
+        val apiVersion = optionValue(compilerArguments, "-api-version") ?: languageVersion
         val command = listOf(
             File(System.getProperty("java.home"), if (File.separatorChar == '\\') "bin/java.exe" else "bin/java").path,
             "-cp", HarnessProperties.kspClasspath.joinToString(separator),
@@ -31,8 +34,8 @@ internal object KspRunner {
             "-module-name=snippet",
             "-jvm-target=1.8",
             // KSP analyzes with its own bundled Kotlin. It's told the language version the compiler will use.
-            "-language-version=${compiler.languageVersion}",
-            "-api-version=${compiler.languageVersion}",
+            "-language-version=$languageVersion",
+            "-api-version=$apiVersion",
             "-jdk-home=${System.getProperty("java.home")}",
             "-source-roots=${sourceRoot.path}",
             "-libraries=${classpath.joinToString(separator)}",
@@ -56,5 +59,25 @@ internal object KspRunner {
             throw AssertionError("KSP didn't finish within $TIMEOUT_MINUTES minutes; its output is in $logFile")
         }
         return KspRun(process.exitValue(), logFile.readText(), kotlinDir, resourcesDir)
+    }
+
+    private fun optionValue(arguments: List<String>, flag: String): String? {
+        var value: String? = null
+        var i = 0
+        while (i < arguments.size) {
+            val arg = arguments[i]
+            when {
+                arg == flag && i + 1 < arguments.size -> {
+                    value = arguments[i + 1]
+                    i += 2
+                }
+                arg.startsWith("$flag=") -> {
+                    value = arg.substringAfter('=')
+                    i++
+                }
+                else -> i++
+            }
+        }
+        return value
     }
 }
