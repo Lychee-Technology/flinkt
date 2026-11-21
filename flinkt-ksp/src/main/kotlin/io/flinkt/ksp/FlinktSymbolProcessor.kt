@@ -49,7 +49,7 @@ internal class FlinktSymbolProcessor(
 
         val validRecords = mutableListOf<ValidatedRecord>()
         for (symbol in annotated) {
-            val record = validateRecord(symbol)
+            val record = validateRecord(symbol, resolver)
             if (record == null) {
                 hasErrors = true
             } else {
@@ -100,7 +100,7 @@ internal class FlinktSymbolProcessor(
         return false
     }
 
-    private fun validateRecord(symbol: KSAnnotated): ValidatedRecord? {
+    private fun validateRecord(symbol: KSAnnotated, resolver: Resolver): ValidatedRecord? {
         val declaration = symbol as? KSClassDeclaration
         if (declaration == null) {
             logger.error("@FlinkType applies to classes only", symbol)
@@ -243,7 +243,7 @@ internal class FlinktSymbolProcessor(
                 valid = false
             }
 
-            val fieldKind = validateFieldType(qualifiedName, property)
+            val fieldKind = validateFieldType(qualifiedName, property, resolver)
             if (fieldKind == null) {
                 valid = false
             } else {
@@ -265,7 +265,7 @@ internal class FlinktSymbolProcessor(
         if (!valid) return null
 
         // Check for recursive cycles across nested @FlinkType fields.
-        if (!checkAcyclic(declaration, qualifiedName, fields)) {
+        if (!checkAcyclic(declaration, qualifiedName, fields, resolver)) {
             return null
         }
 
@@ -287,9 +287,9 @@ internal class FlinktSymbolProcessor(
         )
     }
 
-    private fun validateFieldType(ownerName: String, property: KSPropertyDeclaration): FieldKind? {
+    private fun validateFieldType(ownerName: String, property: KSPropertyDeclaration, resolver: Resolver): FieldKind? {
         val propName = property.simpleName.asString()
-        val resolved = property.type.resolve().unwrapTypeAliases()
+        val resolved = property.type.resolve().unwrapTypeAliases(resolver)
         val typeDesc = describeType(resolved)
 
         if (resolved.isError) {
@@ -427,6 +427,7 @@ internal class FlinktSymbolProcessor(
         record: KSClassDeclaration,
         recordName: String,
         fields: List<ValidatedField>,
+        resolver: Resolver,
     ): Boolean {
         val rootBinaryName = record.binaryName()
         var valid = true
@@ -437,6 +438,7 @@ internal class FlinktSymbolProcessor(
                 targetBinaryName = rootBinaryName,
                 path = mutableListOf(recordName),
                 visited = HashSet(),
+                resolver = resolver,
             )
             if (cycle != null) {
                 logger.error(
@@ -455,6 +457,7 @@ internal class FlinktSymbolProcessor(
         targetBinaryName: String,
         path: MutableList<String>,
         visited: MutableSet<String>,
+        resolver: Resolver,
     ): List<String>? {
         val currentBinary = current.binaryName()
         val currentName = current.qualifiedName?.asString() ?: currentBinary
@@ -464,12 +467,12 @@ internal class FlinktSymbolProcessor(
         if (path.size >= MAX_CYCLE_DEPTH || !visited.add(currentBinary)) return null
         path.add(currentName)
         for (prop in constructorProperties(current)) {
-            val resolved = prop.type.resolve().unwrapTypeAliases()
+            val resolved = prop.type.resolve().unwrapTypeAliases(resolver)
             if (resolved.isError || resolved.isMarkedNullable) continue
             val next = resolved.declaration as? KSClassDeclaration ?: continue
             if (next.classKind != ClassKind.CLASS || Modifier.DATA !in next.modifiers) continue
             if (!next.hasAnnotation(FLINK_TYPE) || next.containingFile == null) continue
-            val cycle = findCycle(next, targetBinaryName, path, visited)
+            val cycle = findCycle(next, targetBinaryName, path, visited, resolver)
             if (cycle != null) return cycle
         }
         path.removeAt(path.lastIndex)
@@ -569,7 +572,7 @@ internal class FlinktSymbolProcessor(
 
             if (hasNested) {
                 append("\n")
-                append("    internal object Factory : io.flinkt.codec.CodecFactory<").append(ref).append("> {\n")
+                append("    internal companion object : io.flinkt.codec.CodecFactory<").append(ref).append("> {\n")
                 appendSchema(record, indent = "        ")
                 append("\n")
                 append("        override fun create(context: io.flinkt.codec.CodecContext): io.flinkt.codec.GeneratedCodec<")
@@ -625,6 +628,8 @@ internal class FlinktSymbolProcessor(
         val moduleSimpleName = "FlinktGeneratedTypeModule_$hash"
         val moduleBinaryName = if (modulePackage.isEmpty()) moduleSimpleName else "$modulePackage.$moduleSimpleName"
 
+        // Aggregating with every @FlinkType declaration's file as a root source: KSP needs all of them in the dirty
+        // set whenever any source changes so getSymbolsWithAnnotation returns the full set of module registrations.
         val origins = records.map { it.containingFile }.distinct().toTypedArray()
         val dependencies = Dependencies(aggregating = true, *origins)
 
@@ -641,12 +646,10 @@ internal class FlinktSymbolProcessor(
                 } else {
                     "${qualified(record.packageName)}.${record.codecSimpleName}"
                 }
-                val hasNested = record.persistedFields.any { it.kind is FieldKind.NestedRecord }
-                val factoryRef = if (hasNested) "$codecRef.Factory" else codecRef
                 append("        registry.register(\n")
                 append("            ").append(record.kotlinReference).append("::class,\n")
-                append("            ").append(factoryRef).append(".schema,\n")
-                append("            ").append(factoryRef).append(",\n")
+                append("            ").append(codecRef).append(".schema,\n")
+                append("            ").append(codecRef).append(",\n")
                 append("        )\n")
             }
             append("    }\n")

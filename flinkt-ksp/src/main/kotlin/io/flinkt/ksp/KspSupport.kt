@@ -1,5 +1,6 @@
 package io.flinkt.ksp
 
+import com.google.devtools.ksp.processing.Resolver
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSAnnotation
@@ -73,7 +74,7 @@ internal fun KSClassDeclaration.superclass(): KSClassDeclaration? = superTypes
     .firstOrNull { it.classKind == ClassKind.CLASS && it.qualifiedName?.asString() !in ANY_NAMES }
 
 /** Unwraps nested `typealias`es while preserving nullability from any alias layer. */
-internal fun KSType.unwrapTypeAliases(): KSType {
+internal fun KSType.unwrapTypeAliases(resolver: Resolver): KSType {
     var current = this
     var nullable = current.isMarkedNullable
     val seen = HashSet<String>()
@@ -84,7 +85,7 @@ internal fun KSType.unwrapTypeAliases(): KSType {
         val expanded = alias.type.resolve()
         nullable = nullable || expanded.isMarkedNullable
         current = if (alias.typeParameters.isNotEmpty() && current.arguments.size == alias.typeParameters.size) {
-            substitute(expanded, alias.typeParameters.zip(current.arguments).toMap())
+            substitute(expanded, alias.typeParameters.zip(current.arguments).toMap(), resolver)
         } else {
             expanded
         }
@@ -92,19 +93,25 @@ internal fun KSType.unwrapTypeAliases(): KSType {
     return if (nullable && !current.isMarkedNullable) current.makeNullable() else current
 }
 
-private fun substitute(type: KSType, mapping: Map<KSTypeParameter, KSTypeArgument>): KSType {
+private fun substitute(type: KSType, mapping: Map<KSTypeParameter, KSTypeArgument>, resolver: Resolver): KSType {
     val decl = type.declaration
     if (decl is KSTypeParameter) {
         val replacement = mapping[decl]?.type?.resolve() ?: return type
         return if (type.isMarkedNullable && !replacement.isMarkedNullable) replacement.makeNullable() else replacement
     }
     if (type.arguments.isEmpty()) return type
+    var changed = false
     val replacedArgs = type.arguments.map { arg ->
         val argType = arg.type?.resolve() ?: return@map arg
-        val newType = substitute(argType, mapping)
-        if (newType == argType) arg else arg
+        val newType = substitute(argType, mapping, resolver)
+        if (newType == argType) {
+            arg
+        } else {
+            changed = true
+            resolver.getTypeArgument(resolver.createKSTypeReferenceFromKSType(newType), arg.variance)
+        }
     }
-    return if (replacedArgs == type.arguments) type else type.replace(replacedArgs)
+    return if (changed) type.replace(replacedArgs) else type
 }
 
 /** Human-readable canonical type description for diagnostics, preserving arguments and `?`. */
