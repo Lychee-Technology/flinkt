@@ -35,7 +35,7 @@ The longer-term goal is serializers for Kotlin types such as nullable types, `Li
 | Stream views | Partial: `.flinkt()`, `asFlink()`, `map`, `keyBy`, and keyed `process` are implemented, and the views forward a first set of Flink methods, such as `filter`, `name`, `union`, and `sinkTo`. Windows, `connect`, joins, `broadcast`, and `getSideOutput` are not offered. |
 | `typeInfo<T>()` | Partial: resolves non-null `Boolean`, `Byte`, `Short`, `Int`, `Long`, `Float`, `Double`, `Char`, and `String` to Flink's own type information. Other types fail explicitly. |
 | Kotlin type model and codec registry | Implemented in `flinkt-core`. An adapter can't necessarily serialize a type that the model represents. |
-| KSP-generated application types and serializers | Planned. `@FlinkType` exists, but annotating a class does not generate a serializer or make `typeInfo<T>()` work for it. |
+| KSP-generated application types and serializers | Partial: `flinkt-ksp` generates Flink-free codecs, persisted schemas, and `GeneratedTypeModule` registrations for non-generic `@FlinkType` data classes whose fields are non-null built-ins or other `@FlinkType` data classes in the same compilation, with `@PersistedFieldOrder` support. `typeInfo<T>()` does not wrap generated codecs in Flink `TypeInformation` yet (#12). |
 | State helpers and Flinkt serializer snapshots or migration | Planned; no Flinkt-managed checkpoint or savepoint compatibility is claimed. |
 
 The source tree has adapters compiled against **Flink 2.3.0** and **1.20.5**. Flink 2.2 is a target without an adapter. None has met the [release criteria](docs/testing.md#release-criteria), so none is a supported target yet. The [Flink compatibility policy](docs/flink-compatibility.md#current-support-matrix) describes the intended matrix; its current table predates the two source-tree adapters.
@@ -96,6 +96,28 @@ Key serialization and key identity are separate concerns: a change to a key's eq
 
 <a id="when-something-isnt-supported"></a>
 A failure from `typeInfo` does not silently fall back to Flink's generic/Kryo type. Its diagnostic mentions `@FlinkType` as a possible fix, but annotating the type doesn't make `typeInfo` work for it yet. Pass an appropriate `TypeInformation` explicitly where the API accepts one, or use Flink directly. Code outside Flinkt's type resolution can still use Flink's generic serialization; Flinkt does not change the job's Flink configuration.
+
+<a id="compile-time-generated-types"></a>
+## Compile-time generated types
+
+Annotating a Kotlin `data class` with `@FlinkType` instructs `flinkt-ksp` to generate a reflection-free, Flink-free `GeneratedCodec`, its `RecordSchema`, and a `GeneratedTypeModule` registered in `META-INF/services/io.flinkt.registry.GeneratedTypeModule`. In the current slice, supported declarations are non-generic `data class`es whose primary-constructor properties are non-null built-in scalars (`Boolean`, `Byte`, `Short`, `Char`, `Int`, `Long`, `Float`, `Double`, `String`) or other `@FlinkType` data classes in the same compilation.
+
+**What gets persisted.** A `@FlinkType` data class's persisted state is strictly its primary-constructor properties. Generated code reads each one directly and rebuilds the value by calling the primary constructor with all of them:
+
+| Declaration | Result |
+|---|---|
+| `val` or `var` primary-constructor property | persisted; a `var` makes the record mutable on `copy()` |
+| class-body property with a backing field (`val createdAt = now()`, `var count = 0`, `lateinit var`) | compile error: wouldn't survive restore; use a computed getter or constructor property |
+| delegated property (`by lazy`, `by Delegates.observable`) | compile error, for the same reason |
+| state inherited from a superclass with its own fields | compile error |
+| `private` or `protected` class, primary constructor, or constructor-property getter | compile error: generated code can't access it |
+| computed property (`val fullName get() = …`) | allowed and not persisted |
+| secondary constructor | allowed and ignored |
+| default argument values, `init` blocks that only check arguments (`require`) | allowed; `init` runs on every `deserialize` and `copy`. An `init` block that mutates a constructor property or component, or a value written while failing those checks, is excluded by contract ([details](docs/architecture.md#rebuilding-through-the-constructor)) |
+| `internal` class, primary constructor, or properties | allowed |
+| non-data class or generic data class | compile error until #19, #21, and #22 |
+
+**Persisted field order.** Fields are written in primary-constructor order by default. To pin or choose another layout order, annotate every primary-constructor property with `@property:PersistedFieldOrder(order = N)` using unique, non-negative `Int` keys (gaps allowed). Partial coverage, negative or duplicate keys, and annotations on non-persisted properties are compile errors.
 
 <a id="keep-flink-recognizable"></a>
 <a id="make-unsupported-types-explicit"></a>

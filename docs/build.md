@@ -6,8 +6,8 @@ This page records how Flinkt is built and why: the module layout, the toolchain,
 
 | Module | Directory | Published | Holds |
 |---|---|---|---|
-| `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`, the type model, the codec SPI, the schema model and the generated-type registry. Later the planner. Kotlin stdlib only |
-| `flinkt-ksp` | `flinkt-ksp/` | yes | the KSP processor (no code yet). Its `persistedOrderPrototype` source set, which isn't published, holds a prototype of the `@PersistedFieldOrder` checks, evidence for [#5](persisted-format.md#field-order) |
+| `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`, `@PersistedFieldOrder`, the type model, the codec SPI, record format v1 scalar/string primitives (`RecordFormat`), the schema model and the generated-type registry. Later the planner. Kotlin stdlib only |
+| `flinkt-ksp` | `flinkt-ksp/` | yes | the KSP processor that generates per-type codecs, persisted schema metadata, and `GeneratedTypeModule` registrations for `@FlinkType` data classes, plus `@PersistedFieldOrder` validation and the minimum-Kotlin warning |
 | `flinkt-view-codegen` | `flinkt-view-codegen/` | no | `@FlinkView`, the KSP processor that generates the views' forwarders, and the extraction of Flink's parameter names, for Flinkt's own build |
 | `flinkt-flink23` | `adapters/flinkt-flink23/` | yes | the Flink 2.3 adapter, primary |
 | `flinkt-flink120` | `adapters/flinkt-flink120/` | yes | the Flink 1.20 adapter |
@@ -129,7 +129,7 @@ KotlinCompilation(KotlinCompiler.MINIMUM)
 
 Each compilation keeps its sources, generated code and classes under the module's `build/compile-tests/`, and a failed assertion prints that directory with the full compiler output.
 
-A processor that a module's tests run has its own source set, so the processor classpath they hand to KSP holds it and nothing else: `test-support`'s `testProcessor` for the harness's own tests, and `flinkt-ksp`'s `persistedOrderPrototype` for #5's evidence on `@PersistedFieldOrder`. The test task passes the source set's output as a system property. #11's real processor replaces the prototype.
+A test-only processor that a module's tests run has its own source set, so the processor classpath they hand to KSP holds it and nothing else: `test-support`'s `testProcessor` for the harness's own tests. `flinkt-ksp`'s tests run its main processor directly, and `KspIncrementalGradleTest` runs it in real Gradle TestKit builds.
 
 ## PR CI
 
