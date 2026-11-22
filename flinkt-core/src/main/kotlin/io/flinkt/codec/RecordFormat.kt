@@ -29,7 +29,7 @@ public object RecordFormat {
     public const val MAX_STRING_LENGTH: Int = 1 shl 26
 
     /** Initial char buffer cap when decoding a string; grows by doubling as chars are actually read. */
-    public const val STRING_CHUNK: Int = 8192
+    internal const val STRING_CHUNK: Int = 8192
 
     private const val CANONICAL_FLOAT_NAN: Int = 0x7fc00000
     private const val CANONICAL_DOUBLE_NAN: Long = 0x7ff8000000000000L
@@ -138,7 +138,7 @@ public object RecordFormat {
 
     /**
      * Reads a string written by [writeString]. Rejects `00` length, non-minimal varints, lengths over [MAX_STRING_LENGTH],
-     * and allocates at most [STRING_CHUNK] chars up front before doubling as chars are read.
+     * and allocates at most 8,192 chars up front before doubling as chars are read.
      */
     @JvmStatic
     public fun readString(input: DataInput): String {

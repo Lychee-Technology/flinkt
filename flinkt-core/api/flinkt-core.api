@@ -28,7 +28,6 @@ public final class io/flinkt/codec/MalformedDataException : java/io/IOException 
 public final class io/flinkt/codec/RecordFormat {
 	public static final field INSTANCE Lio/flinkt/codec/RecordFormat;
 	public static final field MAX_STRING_LENGTH I
-	public static final field STRING_CHUNK I
 	public static final field VERSION I
 	public static final fun readBoolean (Ljava/io/DataInput;)Z
 	public static final fun readByte (Ljava/io/DataInput;)B
