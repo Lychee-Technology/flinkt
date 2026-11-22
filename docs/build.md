@@ -6,14 +6,14 @@ This page records how Flinkt is built and why: the module layout, the toolchain,
 
 | Module | Directory | Published | Holds |
 |---|---|---|---|
-| `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`, the type model, the codec SPI, the schema model and the generated-type registry. Later the planner. Kotlin stdlib only |
-| `flinkt-ksp` | `flinkt-ksp/` | yes | the KSP processor (no code yet). Its `persistedOrderPrototype` source set, which isn't published, holds a prototype of the `@PersistedFieldOrder` checks, evidence for [#5](persisted-format.md#field-order) |
+| `flinkt-core` | `flinkt-core/` | yes | `@FlinkType`, `@PersistedFieldOrder`, the type model, the codec SPI, record format v1 scalar/string primitives (`RecordFormat`), the schema model and the generated-type registry. Later the planner. Kotlin stdlib only |
+| `flinkt-ksp` | `flinkt-ksp/` | yes | the KSP processor that generates per-type codecs, persisted schema metadata, and `GeneratedTypeModule` registrations for `@FlinkType` data classes, plus `@PersistedFieldOrder` validation and the minimum-Kotlin warning |
 | `flinkt-view-codegen` | `flinkt-view-codegen/` | no | `@FlinkView`, the KSP processor that generates the views' forwarders, and the extraction of Flink's parameter names, for Flinkt's own build |
 | `flinkt-flink23` | `adapters/flinkt-flink23/` | yes | the Flink 2.3 adapter, primary |
 | `flinkt-flink120` | `adapters/flinkt-flink120/` | yes | the Flink 1.20 adapter |
 | `test-support` | `test-support/` | no | the exact-type carrier and the compile-test harness |
 
-Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types, [views](architecture.md#views) and `@ExperimentalFlinkApi`, and `flinkt-view-codegen`'s [generator](architecture.md#generated-forwarders), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
+Why the modules are separate is in [Layers and modules](architecture.md#layers-and-modules). Apart from `flinkt-core`'s [type model and registry](architecture.md#type-model-and-registry), `RecordFormat`, and `@PersistedFieldOrder`, `flinkt-ksp`'s processor, the adapters' [`typeInfo<T>()`](architecture.md#type-information) for built-in types, [views](architecture.md#views) and `@ExperimentalFlinkApi`, and `flinkt-view-codegen`'s [generator](architecture.md#generated-forwarders), the production code is only what the checks below need: each adapter's line constant gives the shared source a per-line symbol to compile against.
 
 ### Adapters
 
@@ -78,7 +78,7 @@ The Gradle wrapper pins Gradle 9.9.1 with its distribution checksum.
 
 ## Public API
 
-Published modules compile in Kotlin's explicit API mode: a declaration without a visibility modifier is an error. Each has an ABI dump at `api/<module>.api`, written by the Kotlin Gradle plugin's ABI validation. `check` runs `checkKotlinAbi`, which fails when the compiled public ABI differs from the dump. After an intended API change, `./gradlew updateKotlinAbi` rewrites the dumps, and their diff is what review reads ([Flinkt API compatibility](testing.md#flinkt-api-compatibility)). `flinkt-ksp`'s dump is still empty. An adapter's dump has `typeInfo`'s non-inline entry point but not the reified `typeInfo<T>()`, which is synthetic in bytecode, so compile tests pin its source API ([Type information](architecture.md#type-information)). It also has the generated forwarders, so an overload that a Flink upgrade adds to a forwarded method shows in its diff. Kotlin's default JVM default-method mode, `-jvm-default=enable`, compiles each forwarder to a default method of its `*Forwarders` interface, plus a static method of the interface's `DefaultImpls` class and a method of the view class that implements the interface, and the dump lists all three. The dump records JVM signatures, without parameter names or the `@ExperimentalFlinkApi` marker, which the cross-adapter comparison covers.
+Published modules compile in Kotlin's explicit API mode: a declaration without a visibility modifier is an error. Each has an ABI dump at `api/<module>.api`, written by the Kotlin Gradle plugin's ABI validation. `check` runs `checkKotlinAbi`, which fails when the compiled public ABI differs from the dump. After an intended API change, `./gradlew updateKotlinAbi` rewrites the dumps, and their diff is what review reads ([Flinkt API compatibility](testing.md#flinkt-api-compatibility)). An adapter's dump has `typeInfo`'s non-inline entry point but not the reified `typeInfo<T>()`, which is synthetic in bytecode, so compile tests pin its source API ([Type information](architecture.md#type-information)). It also has the generated forwarders, so an overload that a Flink upgrade adds to a forwarded method shows in its diff. Kotlin's default JVM default-method mode, `-jvm-default=enable`, compiles each forwarder to a default method of its `*Forwarders` interface, plus a static method of the interface's `DefaultImpls` class and a method of the view class that implements the interface, and the dump lists all three. The dump records JVM signatures, without parameter names or the `@ExperimentalFlinkApi` marker, which the cross-adapter comparison covers.
 
 The plugin's ABI validation DSL is experimental in Kotlin 2.4.21: it needs `@OptIn(ExperimentalAbiValidation::class)`, and a later Kotlin release may change it. If it does, the change is confined to `flinkt.published`. The standalone binary-compatibility-validator plugin writes the same dump format.
 
@@ -129,7 +129,7 @@ KotlinCompilation(KotlinCompiler.MINIMUM)
 
 Each compilation keeps its sources, generated code and classes under the module's `build/compile-tests/`, and a failed assertion prints that directory with the full compiler output.
 
-A processor that a module's tests run has its own source set, so the processor classpath they hand to KSP holds it and nothing else: `test-support`'s `testProcessor` for the harness's own tests, and `flinkt-ksp`'s `persistedOrderPrototype` for #5's evidence on `@PersistedFieldOrder`. The test task passes the source set's output as a system property. #11's real processor replaces the prototype.
+A test-only processor that a module's tests run has its own source set, so the processor classpath they hand to KSP holds it and nothing else: `test-support`'s `testProcessor` for the harness's own tests. `flinkt-ksp`'s tests run its main processor directly, and `KspIncrementalGradleTest` runs it in real Gradle TestKit builds.
 
 ## PR CI
 

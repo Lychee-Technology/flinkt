@@ -35,6 +35,16 @@ class KspCompilationTest {
         assertEquals(Origin.KSP, error.origin)
         assertEquals("sample/Bad.kt", error.file)
         assertEquals(4, error.line) // `object Bad`: KSP locates a declaration at its name, not its annotation
+    }
 
+    @Test
+    fun `explicit language-version in compilerArguments is forwarded to KSP`() {
+        KotlinCompilation(
+            kspProcessorClasspath = processor,
+            kspProcessorOptions = mapOf("logKotlinVersion" to "true"),
+            compilerArguments = listOf("-language-version", "2.3"),
+        )
+            .compile(greet, SourceFile("sample/User.kt", "package sample\n\n@Greet\nclass User\n"))
+            .assertWarning("ksp kotlinVersion=2.3")
     }
 }

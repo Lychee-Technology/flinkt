@@ -1,6 +1,8 @@
 package io.flinkt.flink.format
 
 import io.flinkt.codec.GeneratedCodec
+import io.flinkt.codec.MalformedDataException as CoreMalformedDataException
+import io.flinkt.codec.RecordFormat as CoreRecordFormat
 import java.io.EOFException
 import org.apache.flink.api.common.typeutils.TypeSerializer
 import org.apache.flink.api.common.typeutils.base.BooleanSerializer
@@ -199,6 +201,60 @@ class RecordFormatTest {
 
         assertEquals("7f c0 00 00", written { RecordFormat.writeFloat(it, floatNaN) }.hex())
         assertEquals("7f f8 00 00 00 00 00 00", written { RecordFormat.writeDouble(it, doubleNaN) }.hex())
+        assertEquals("7f c0 00 00", written { CoreRecordFormat.writeFloat(it, floatNaN) }.hex())
+        assertEquals("7f f8 00 00 00 00 00 00", written { CoreRecordFormat.writeDouble(it, doubleNaN) }.hex())
+    }
+
+    @Test
+    fun `production RecordFormat matches Flink's built-in serializers on both output views and rejects malformed bytes`() {
+        fun <T> check(
+            serializer: TypeSerializer<T>,
+            values: List<T>,
+            write: (DataOutputView, T) -> Unit,
+            read: (DataInputDeserializer) -> T,
+            assertEqual: (T, T) -> Unit = { expected, actual -> assertEquals(expected, actual) },
+        ) {
+            for (value in values) {
+                val ours = written { write(it, value) }
+                val flinks = written { serializer.serialize(value, it) }
+                assertEquals(hex(flinks.serializer), ours.hex(), "$value")
+                val input = DataInputDeserializer(ours.bytes)
+                assertEqual(value, read(input))
+                assertEquals(0, input.available(), "$value left bytes unread")
+            }
+        }
+        check(BooleanSerializer.INSTANCE, listOf(false, true), CoreRecordFormat::writeBoolean, CoreRecordFormat::readBoolean)
+        check(ByteSerializer.INSTANCE, listOf<Byte>(0, -1, Byte.MIN_VALUE, Byte.MAX_VALUE), CoreRecordFormat::writeByte, CoreRecordFormat::readByte)
+        check(ShortSerializer.INSTANCE, listOf<Short>(0, -1, Short.MIN_VALUE, Short.MAX_VALUE), CoreRecordFormat::writeShort, CoreRecordFormat::readShort)
+        check(IntSerializer.INSTANCE, listOf(0, -1, Int.MIN_VALUE, Int.MAX_VALUE), CoreRecordFormat::writeInt, CoreRecordFormat::readInt)
+        check(LongSerializer.INSTANCE, listOf(0, -1, Long.MIN_VALUE, Long.MAX_VALUE), CoreRecordFormat::writeLong, CoreRecordFormat::readLong)
+        check(CharSerializer.INSTANCE, listOf('a', '\u0000', '\uD800', '\uFFFD'), CoreRecordFormat::writeChar, CoreRecordFormat::readChar)
+        check(StringSerializer.INSTANCE, listOf("", "Ada", "\uD800", "😀"), CoreRecordFormat::writeString, CoreRecordFormat::readString)
+        check(
+            FloatSerializer.INSTANCE,
+            listOf(0.0f, -0.0f, Float.MIN_VALUE, Float.NaN, floatNaN, Float.NEGATIVE_INFINITY),
+            CoreRecordFormat::writeFloat,
+            CoreRecordFormat::readFloat,
+        ) { expected, actual ->
+            assertEquals(java.lang.Float.floatToIntBits(expected), java.lang.Float.floatToIntBits(actual))
+        }
+        check(
+            DoubleSerializer.INSTANCE,
+            listOf(0.0, -0.0, Double.MIN_VALUE, Double.NaN, doubleNaN, Double.POSITIVE_INFINITY),
+            CoreRecordFormat::writeDouble,
+            CoreRecordFormat::readDouble,
+        ) { expected, actual ->
+            assertEquals(java.lang.Double.doubleToLongBits(expected), java.lang.Double.doubleToLongBits(actual))
+        }
+
+        val badBool = assertThrows<CoreMalformedDataException> { CoreRecordFormat.readBoolean(DataInputDeserializer(bytes("02"))) }
+        assertTrue("a Boolean is 00 or 01, not 02" in badBool.message.orEmpty(), "${badBool.message}")
+        val badFloat = assertThrows<CoreMalformedDataException> { CoreRecordFormat.readFloat(DataInputDeserializer(bytes("7f 80 00 01"))) }
+        assertTrue("7f c0 00 00" in badFloat.message.orEmpty(), "${badFloat.message}")
+        val badDouble = assertThrows<CoreMalformedDataException> {
+            CoreRecordFormat.readDouble(DataInputDeserializer(bytes("7f f0 00 00 00 00 00 01")))
+        }
+        assertTrue("7f f8 00 00 00 00 00 00" in badDouble.message.orEmpty(), "${badDouble.message}")
     }
 
     @Test

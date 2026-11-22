@@ -20,11 +20,12 @@ import org.junit.jupiter.params.provider.EnumSource
  * `deserialize` and `copy` rebuild a record by calling its primary constructor with the constructor properties they
  * read, so an `init` block runs on every rebuild (docs/architecture.md, "Rebuilding through the constructor").
  *
- * flinkt-ksp doesn't generate codecs yet (#12), so the records' codecs here are stand-ins that rebuild the way generated
+ * `flinkt-core` doesn't depend on `flinkt-ksp`, so the records' codecs here are stand-ins that rebuild the way generated
  * ones do: read each constructor property, then call the primary constructor, with a nested record's codec fixed when
- * the outer one is created. What an `init` block does at construction is code the compiler emits into the record's
- * class, so the records are compiled by both pinned compilers and loaded into this test. The cases whose `init` block
- * changes a property show that these assertions catch a rebuild that changes a value.
+ * the outer one is created. `flinkt-ksp`'s `GeneratedConstructorRebuildTest` (#11) runs the same cases against the real
+ * KSP-generated codecs. What an `init` block does at construction is code the compiler emits into the record's class,
+ * so the records are compiled by both pinned compilers and loaded into this test. The cases whose `init` block changes
+ * a property show that these assertions catch a rebuild that changes a value.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class ConstructorRebuildTest {

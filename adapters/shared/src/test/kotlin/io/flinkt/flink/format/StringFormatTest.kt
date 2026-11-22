@@ -1,5 +1,7 @@
 package io.flinkt.flink.format
 
+import io.flinkt.codec.MalformedDataException as CoreMalformedDataException
+import io.flinkt.codec.RecordFormat as CoreRecordFormat
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.EOFException
@@ -38,6 +40,8 @@ class StringFormatTest {
         for ((string, expected) in examples) {
             assertEquals(normalized(expected), written { RecordFormat.writeString(it, string) }.hex(), string)
             assertEquals(string, RecordFormat.readString(DataInputDeserializer(bytes(expected))))
+            assertEquals(normalized(expected), written { CoreRecordFormat.writeString(it, string) }.hex(), string)
+            assertEquals(string, CoreRecordFormat.readString(DataInputDeserializer(bytes(expected))))
         }
     }
 
@@ -45,14 +49,20 @@ class StringFormatTest {
     fun `Flinkt's bytes are StringValue's bytes, and each reads what the other wrote`() {
         for (string in corpus()) {
             val ours = written { RecordFormat.writeString(it, string) }
+            val core = written { CoreRecordFormat.writeString(it, string) }
             val flinks = written { StringValue.writeString(string, it) }
             assertEquals(hex(flinks.serializer), hex(flinks.paged), "Flink's own bytes for ${describe(string)}")
             assertArrayEquals(flinks.serializer, ours.bytes, describe(string))
+            assertArrayEquals(flinks.serializer, core.bytes, describe(string))
 
             assertEquals(string, StringValue.readString(DataInputDeserializer(ours.bytes)), describe(string))
+            assertEquals(string, StringValue.readString(DataInputDeserializer(core.bytes)), describe(string))
             val input = DataInputDeserializer(flinks.serializer)
             assertEquals(string, RecordFormat.readString(input), describe(string))
             assertEquals(0, input.available())
+            val coreInput = DataInputDeserializer(flinks.serializer)
+            assertEquals(string, CoreRecordFormat.readString(coreInput), describe(string))
+            assertEquals(0, coreInput.available())
         }
     }
 
@@ -85,6 +95,8 @@ class StringFormatTest {
             assertTrue(message in e.message.orEmpty(), "${e.message}")
             val skip = assertThrows<MalformedDataException>(hex) { RecordFormat.skipString(DataInputDeserializer(bytes(hex))) }
             assertEquals(e.message, skip.message)
+            val core = assertThrows<CoreMalformedDataException>(hex) { CoreRecordFormat.readString(DataInputDeserializer(bytes(hex))) }
+            assertTrue(message in core.message.orEmpty(), "${core.message}")
         }
         fails("00", "never 00")
         fails("81 00", "a string length has a varint with a redundant last byte 00")
@@ -94,6 +106,7 @@ class StringFormatTest {
         fails("02 ff ff 7f", "a char is 2097151, over 65535")
         fails("02 ff ff ff 01", "a char has a varint longer than 3 bytes")
         assertThrows<EOFException> { RecordFormat.readString(DataInputDeserializer(bytes("04 41 64"))) }
+        assertThrows<EOFException> { CoreRecordFormat.readString(DataInputDeserializer(bytes("04 41 64"))) }
     }
 
     @Test
@@ -102,12 +115,18 @@ class StringFormatTest {
         // Flink's StringValue.readString allocates an array of the claimed length before it reads a char. A longer
         // claim fails at the length (ResourceLimitsTest).
         assertEquals(1 shl 26, RecordFormat.MAX_STRING_LENGTH)
+        assertEquals(1 shl 26, CoreRecordFormat.MAX_STRING_LENGTH)
         val claim = bytes("81 80 80 20 41 41 41")
         val threads = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
         val before = threads.getThreadAllocatedBytes(Thread.currentThread().id)
         assertThrows<EOFException> { RecordFormat.readString(DataInputDeserializer(claim)) }
         val allocated = threads.getThreadAllocatedBytes(Thread.currentThread().id) - before
         assertTrue(allocated < 1_000_000, "reading allocated $allocated bytes")
+
+        val beforeCore = threads.getThreadAllocatedBytes(Thread.currentThread().id)
+        assertThrows<EOFException> { CoreRecordFormat.readString(DataInputDeserializer(claim)) }
+        val allocatedCore = threads.getThreadAllocatedBytes(Thread.currentThread().id) - beforeCore
+        assertTrue(allocatedCore < 1_000_000, "core reading allocated $allocatedCore bytes")
     }
 
     private fun corpus(): List<String> {
