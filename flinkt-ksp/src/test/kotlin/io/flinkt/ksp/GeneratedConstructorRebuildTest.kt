@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotSame
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.params.ParameterizedTest
@@ -51,6 +52,16 @@ class GeneratedConstructorRebuildTest {
             assertNotSame(value, copied, "copy(v) of $name")
             assertArrayEquals(written, serialize(sample.codec, copied), "bytes of copy(v) of $name")
         }
+
+        // A val-only record of immutable built-in fields is returned as-is by copy() without calling the constructor,
+        // while deserialize() still rebuilds it through the primary constructor.
+        val immutable = samples.getValue("ValidatedVal(2)")
+        val immutableWritten = serialize(immutable.codec, immutable.value)
+        val immutableDecoded = deserialize(immutable.codec, immutableWritten)
+        assertEquals(immutable.value, immutableDecoded)
+        assertNotSame(immutable.value, immutableDecoded)
+        assertArrayEquals(immutableWritten, serialize(immutable.codec, immutableDecoded))
+        assertSame(immutable.value, immutable.codec.copy(immutable.value))
     }
 
     @ParameterizedTest
@@ -126,6 +137,13 @@ class GeneratedConstructorRebuildTest {
             import io.flinkt.FlinkType
 
             @FlinkType
+            data class ValidatedVal(val count: Int) {
+                init {
+                    require(count >= 0) { "$CHECK_MESSAGE" }
+                }
+            }
+
+            @FlinkType
             data class Checked(var count: Int) {
                 init {
                     require(count >= 0) { "$CHECK_MESSAGE" }
@@ -164,6 +182,7 @@ class GeneratedConstructorRebuildTest {
 
             class Samples : () -> Map<String, Pair<String, Any>> {
                 override fun invoke(): Map<String, Pair<String, Any>> = mapOf(
+                    "ValidatedVal(2)" to ("com.example.ValidatedVal" to ValidatedVal(2)),
                     "Checked(2)" to ("com.example.Checked" to Checked(2)),
                     "Checked(1), count = 5" to ("com.example.Checked" to Checked(1).apply { count = 5 }),
                     "Checked(1), count = -1" to ("com.example.Checked" to Checked(1).apply { count = -1 }),
